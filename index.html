@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Recruitment Suspension Decider</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif; }
+  .field-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: rgb(71 85 105); font-weight: 600; }
+  input[type="number"], input[type="text"] { width: 100%; }
+  .num-input { padding: 0.4rem 0.55rem; border: 1px solid rgb(203 213 225); border-radius: 0.4rem; background: white; }
+  .num-input:focus { outline: 2px solid rgb(59 130 246); outline-offset: -1px; border-color: transparent; }
+  table.curve-table input { padding: 0.3rem; border: 1px solid rgb(226 232 240); border-radius: 0.3rem; }
+</style>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-900">
+<div class="max-w-6xl mx-auto p-6">
+  <header class="mb-6">
+    <h1 class="text-3xl font-semibold">Recruitment Suspension Decider</h1>
+    <p class="text-slate-600 mt-1">Forecast cap-fill probability and decide whether a suspension request is worth making to the DvC.</p>
+  </header>
+
+  <nav class="flex gap-1 mb-6 border-b border-slate-200">
+    <button data-tab="predict"  class="tab-btn px-4 py-2 border-b-2 font-medium">Predict</button>
+    <button data-tab="profiles" class="tab-btn px-4 py-2 border-b-2 font-medium">Course profiles</button>
+    <button data-tab="settings" class="tab-btn px-4 py-2 border-b-2 font-medium">DvC settings</button>
+  </nav>
+
+  <!-- =================== PREDICT TAB =================== -->
+  <section id="tab-predict" class="tab-section">
+    <div id="predict-noprofile" class="hidden p-6 bg-white border border-slate-200 rounded-lg">
+      <p class="text-slate-700">No course profiles yet. <button class="text-blue-600 underline" onclick="switchTab('profiles')">Create one</button> to get started.</p>
+    </div>
+
+    <div id="predict-main">
+      <div class="mb-4 flex items-center gap-3">
+        <label class="field-label">Course</label>
+        <select id="predict-profile" class="num-input max-w-md"></select>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-6">
+        <!-- Inputs -->
+        <div class="bg-white border border-slate-200 rounded-lg p-5">
+          <h2 class="text-lg font-semibold mb-4">Where things stand now</h2>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="field-label">Weeks until course start</label>
+              <input id="in-weeks" type="number" min="0" step="1" class="num-input mt-1">
+            </div>
+            <div>
+              <label class="field-label">Applications received</label>
+              <input id="in-apps" type="number" min="0" step="1" class="num-input mt-1">
+            </div>
+            <div>
+              <label class="field-label">Offers made</label>
+              <input id="in-offers" type="number" min="0" step="1" class="num-input mt-1">
+            </div>
+            <div>
+              <label class="field-label">Firms accepted</label>
+              <input id="in-firms" type="number" min="0" step="1" class="num-input mt-1">
+            </div>
+            <div>
+              <label class="field-label">Expected ICP transfers</label>
+              <input id="in-icp" type="number" min="0" step="1" class="num-input mt-1">
+            </div>
+            <div>
+              <label class="field-label">Expected Foundation transfers</label>
+              <input id="in-found" type="number" min="0" step="1" class="num-input mt-1">
+            </div>
+            <div>
+              <label class="field-label">Intake month</label>
+              <select id="in-intake" class="num-input mt-1">
+                <option>September</option><option>January</option><option>April</option><option>June</option><option>Other</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label">Academic year</label>
+              <input id="in-year" type="text" class="num-input mt-1" placeholder="e.g. 2026/27">
+            </div>
+          </div>
+          <p class="text-xs text-slate-500 mt-3">Conversion ratios and post-enrolment withdrawal come from the course profile (you enter these from PowerBI).</p>
+        </div>
+
+        <!-- Recommendation -->
+        <div id="recommendation-card" class="rounded-lg p-5 border">
+          <div class="text-xs uppercase tracking-wider font-semibold mb-1" id="rec-eyebrow">Recommendation</div>
+          <div id="rec-label" class="text-2xl font-semibold mb-2">—</div>
+          <div id="rec-detail" class="text-sm leading-relaxed">—</div>
+          <div id="rec-meta" class="mt-4 grid grid-cols-2 gap-3 text-sm"></div>
+        </div>
+      </div>
+
+      <!-- Distribution -->
+      <div class="bg-white border border-slate-200 rounded-lg p-5 mt-6">
+        <h2 class="text-lg font-semibold mb-2">Final enrolment forecast</h2>
+        <p class="text-sm text-slate-600 mb-4" id="forecast-summary">—</p>
+        <div style="height: 260px;"><canvas id="distChart"></canvas></div>
+      </div>
+
+      <!-- Diagnostic breakdown -->
+      <div class="bg-white border border-slate-200 rounded-lg p-5 mt-6">
+        <h2 class="text-lg font-semibold mb-3">How the forecast breaks down</h2>
+        <div id="breakdown" class="grid md:grid-cols-2 gap-x-8 gap-y-2 text-sm"></div>
+      </div>
+
+      <!-- Form draft -->
+      <div class="bg-white border border-slate-200 rounded-lg p-5 mt-6">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-lg font-semibold">Microsoft Form draft</h2>
+          <button id="copy-rationale" class="text-sm px-3 py-1 border border-slate-300 rounded hover:bg-slate-50">Copy rationale</button>
+        </div>
+        <p class="text-sm text-slate-600 mb-4">Pre-filled values you'll paste into the central recruitment-suspension form. The rationale paragraph is auto-generated — review before submitting.</p>
+        <div id="form-draft" class="grid md:grid-cols-2 gap-x-8 gap-y-2 text-sm"></div>
+        <div class="mt-4">
+          <label class="field-label">Rationale for request</label>
+          <textarea id="rationale" rows="6" class="num-input mt-1 font-mono text-sm" style="white-space: pre-wrap;"></textarea>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================== PROFILES TAB =================== -->
+  <section id="tab-profiles" class="tab-section hidden">
+    <div class="grid md:grid-cols-3 gap-6">
+      <div class="bg-white border border-slate-200 rounded-lg p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-semibold">Courses</h2>
+          <button id="new-profile" class="text-sm px-3 py-1 bg-slate-900 text-white rounded">+ New</button>
+        </div>
+        <ul id="profile-list" class="space-y-1"></ul>
+      </div>
+
+      <div id="profile-editor" class="md:col-span-2 bg-white border border-slate-200 rounded-lg p-5">
+        <p class="text-slate-500">Select or create a course to edit its profile.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================== SETTINGS TAB =================== -->
+  <section id="tab-settings" class="tab-section hidden">
+    <div class="bg-white border border-slate-200 rounded-lg p-5 max-w-2xl">
+      <h2 class="text-lg font-semibold mb-1">How the DvC weighs a suspension request</h2>
+      <p class="text-sm text-slate-600 mb-5">These thresholds tune how the tool guesses whether the DvC will approve a request. Calibrate them against real outcomes over time.</p>
+
+      <div class="space-y-5">
+        <div>
+          <label class="field-label">Safety buffer above cap</label>
+          <p class="text-xs text-slate-500 mb-2">The DvC's real concern is over-enrolment. Probability is measured against cap × (1 + buffer), not the cap itself.</p>
+          <div class="flex items-center gap-3">
+            <input id="s-buffer" type="number" step="0.01" min="0" max="0.5" class="num-input max-w-[8rem]">
+            <span class="text-sm text-slate-600">(e.g. 0.05 = 5% above cap)</span>
+          </div>
+        </div>
+
+        <div>
+          <label class="field-label">Submit-zone threshold</label>
+          <p class="text-xs text-slate-500 mb-2">Minimum P(overshoot) at which the tool recommends submitting the request.</p>
+          <div class="flex items-center gap-3">
+            <input id="s-submit" type="number" step="0.01" min="0" max="1" class="num-input max-w-[8rem]">
+            <span class="text-sm text-slate-600">(e.g. 0.70 = 70%)</span>
+          </div>
+        </div>
+
+        <div>
+          <label class="field-label">Marginal-zone threshold</label>
+          <p class="text-xs text-slate-500 mb-2">Between this and the submit threshold, the tool flags the situation as borderline.</p>
+          <div class="flex items-center gap-3">
+            <input id="s-marginal" type="number" step="0.01" min="0" max="1" class="num-input max-w-[8rem]">
+            <span class="text-sm text-slate-600">(e.g. 0.40 = 40%)</span>
+          </div>
+        </div>
+
+        <div>
+          <label class="field-label">Late-cycle cutoff (weeks)</label>
+          <p class="text-xs text-slate-500 mb-2">Inside this window before start, the tool will recommend against asking — too late for suspension to be meaningful.</p>
+          <div class="flex items-center gap-3">
+            <input id="s-minweeks" type="number" step="1" min="0" max="12" class="num-input max-w-[8rem]">
+            <span class="text-sm text-slate-600">weeks</span>
+          </div>
+        </div>
+
+        <div>
+          <label class="field-label">Uncertainty amplifier (early cycle)</label>
+          <p class="text-xs text-slate-500 mb-2">How much extra forecast spread is applied when little of the application curve has played out yet. Higher = more sceptical of early-cycle predictions.</p>
+          <div class="flex items-center gap-3">
+            <input id="s-amp" type="number" step="0.1" min="0" max="5" class="num-input max-w-[8rem]">
+            <span class="text-sm text-slate-600">(default 1.5)</span>
+          </div>
+        </div>
+
+        <div>
+          <label class="field-label">Curve completion for full confidence</label>
+          <p class="text-xs text-slate-500 mb-2">Below this fraction of the application curve, the recommendation is discounted proportionally. Stops the tool from confidently recommending a suspension on flimsy early-cycle data.</p>
+          <div class="flex items-center gap-3">
+            <input id="s-phi" type="number" step="0.05" min="0.05" max="1" class="num-input max-w-[8rem]">
+            <span class="text-sm text-slate-600">(default 0.40 = 40%)</span>
+          </div>
+        </div>
+      </div>
+
+      <button id="save-settings" class="mt-6 px-4 py-2 bg-slate-900 text-white rounded font-medium">Save settings</button>
+      <button id="reset-settings" class="mt-6 ml-2 px-4 py-2 border border-slate-300 rounded">Reset to defaults</button>
+    </div>
+  </section>
+</div>
+
+<script>
+/* ===================== STATE / STORAGE ===================== */
+const STORAGE_KEY = 'recruitment-decider-state-v1';
+
+const DEFAULT_CURVE = [
+  { w: 32, p: 0.02 },
+  { w: 26, p: 0.06 },
+  { w: 20, p: 0.16 },
+  { w: 16, p: 0.30 },
+  { w: 12, p: 0.50 },
+  { w: 8,  p: 0.72 },
+  { w: 4,  p: 0.88 },
+  { w: 2,  p: 0.96 },
+  { w: 0,  p: 1.00 },
+];
+
+const DEFAULT_SETTINGS = {
+  safetyBuffer: 0.05,
+  submitThreshold: 0.70,
+  marginalThreshold: 0.40,
+  minWeeksWindow: 2,
+  uncertaintyAmplifier: 1.5,
+  fullConfidencePhi: 0.40,
+};
+
+const SCHOOLS = ['DHCP', 'ELS', 'PSHS', 'SMPBS'];
+const INTAKE_MONTHS = ['September', 'January', 'April', 'June', 'Other'];
+
+function newProfile(name = 'New course') {
+  return {
+    id: (crypto.randomUUID ? crypto.randomUUID() : 'p_' + Math.random().toString(36).slice(2)),
+    name,
+    code: '',
+    school: SCHOOLS[0],
+    cap: 30,
+    placementCourse: false,
+    repeatsImpactPlacement: 0,
+    expectedRepeats: 4,
+    expectedPostEnrolWithdrawal: 0.05,
+    curve: DEFAULT_CURVE.map(r => ({ ...r })),
+    appToOffer: 0.75,
+    offerToFirm: 0.35,
+    firmToEnrolled: 0.88,
+    baseCV: 0.08,
+  };
+}
+
+function migrateProfile(p) {
+  // Fill in defaults for older saved profiles so the new fields work.
+  const d = newProfile();
+  return { ...d, ...p,
+    code: p.code ?? '',
+    school: p.school ?? SCHOOLS[0],
+    placementCourse: p.placementCourse ?? false,
+    repeatsImpactPlacement: p.repeatsImpactPlacement ?? 0,
+    expectedRepeats: p.expectedRepeats ?? (p.repeats ?? 4),
+    expectedPostEnrolWithdrawal: p.expectedPostEnrolWithdrawal ?? 0.05,
+  };
+}
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      parsed.settings = { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) };
+      parsed.profiles = (parsed.profiles || []).map(migrateProfile);
+      parsed.currentInputs = parsed.currentInputs || {};
+      return parsed;
+    }
+  } catch (e) { console.warn('Bad saved state', e); }
+  return { profiles: [newProfile('Example course')], settings: { ...DEFAULT_SETTINGS }, currentInputs: {}, currentProfileId: null };
+}
+
+function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+
+let state = loadState();
+if (!state.currentProfileId && state.profiles.length) state.currentProfileId = state.profiles[0].id;
+let chart = null;
+
+/* ===================== MATH ===================== */
+function normalCDF(x) {
+  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+  const sign = x < 0 ? -1 : 1;
+  const ax = Math.abs(x) / Math.sqrt(2);
+  const t = 1 / (1 + p * ax);
+  const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-ax * ax);
+  return 0.5 * (1 + sign * y);
+}
+
+function normalPDF(x, mu, sigma) {
+  return Math.exp(-0.5 * ((x - mu) / sigma) ** 2) / (sigma * Math.sqrt(2 * Math.PI));
+}
+
+function curveLookup(curve, weeksToStart) {
+  if (!curve.length) return 1.0;
+  const sorted = [...curve].sort((a, b) => b.w - a.w); // w descending: earliest first
+  if (weeksToStart >= sorted[0].w) return sorted[0].p;
+  if (weeksToStart <= sorted[sorted.length - 1].w) return sorted[sorted.length - 1].p;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i], b = sorted[i + 1];
+    if (weeksToStart <= a.w && weeksToStart >= b.w) {
+      const t = (a.w - weeksToStart) / (a.w - b.w);
+      return a.p + t * (b.p - a.p);
+    }
+  }
+  return 1.0;
+}
+
+function forecast(profile, inputs, settings) {
+  const { cap, appToOffer, offerToFirm, firmToEnrolled, baseCV, curve,
+          placementCourse, repeatsImpactPlacement, expectedPostEnrolWithdrawal } = profile;
+  const weeksToStart = Math.max(0, +inputs.weeksToStart || 0);
+  const currentApps = Math.max(0, +inputs.currentApps || 0);
+  const currentOffers = Math.max(0, +inputs.currentOffers || 0);
+  const currentFirms = Math.max(0, +inputs.currentFirms || 0);
+  const icp = Math.max(0, +inputs.icpTransfers || 0);
+  const foundation = Math.max(0, +inputs.foundationTransfers || 0);
+
+  const phi = Math.max(0.01, Math.min(1.0, curveLookup(curve, weeksToStart)));
+  const projectedFinalApps = currentApps > 0 ? currentApps / phi : 0;
+
+  const fromFirms = currentFirms * firmToEnrolled;
+  const offersWaiting = Math.max(0, currentOffers - currentFirms);
+  const fromOffersWaiting = offersWaiting * offerToFirm * firmToEnrolled;
+  const appsWaiting = Math.max(0, currentApps - currentOffers);
+  const fromAppsWaiting = appsWaiting * appToOffer * offerToFirm * firmToEnrolled;
+  const futureApps = Math.max(0, projectedFinalApps - currentApps);
+  const fromFutureApps = futureApps * appToOffer * offerToFirm * firmToEnrolled;
+
+  // Total new intake (pre-Sept-Dec withdrawal). ICP & Foundation are treated as near-certain.
+  const meanNewIntakePreWithdrawal =
+      fromFirms + fromOffersWaiting + fromAppsWaiting + fromFutureApps + icp + foundation;
+
+  // Subtract typical post-enrolment withdrawals (Sept-Dec drop-out).
+  // This is what the course will actually carry by first census / first placement.
+  const meanNewIntake = meanNewIntakePreWithdrawal * (1 - expectedPostEnrolWithdrawal);
+
+  // Floor intake: what we'd get if we suspended applications *today* and only processed what's already in the pipeline.
+  // No future apps. Already-received apps still convert through to offers/firms.
+  const floorIntakePreWithdrawal = fromFirms + fromOffersWaiting + fromAppsWaiting + icp + foundation;
+  const floorIntake = floorIntakePreWithdrawal * (1 - expectedPostEnrolWithdrawal);
+
+  // Effective cap: for placement courses, repeats consume placement slots so cap is reduced.
+  const effectiveCap = placementCourse ? Math.max(1, cap - repeatsImpactPlacement) : cap;
+
+  // Spread: scales with baseCV, inflated when curve is incomplete.
+  // ICP/Foundation are near-certain so don't add to the relevant variance — apply CV to the
+  // application-driven portion only.
+  const appDrivenMean = Math.max(0, meanNewIntake - (icp + foundation) * (1 - expectedPostEnrolWithdrawal));
+  const sd = Math.max(1, appDrivenMean * baseCV * (1 + (1 - phi) * settings.uncertaintyAmplifier));
+
+  // Floor sd: tighter — based only on already-in-pipeline components, no curve amplification.
+  const sdFloor = Math.max(0.5, floorIntake * baseCV);
+
+  const pMeetCap = 1 - normalCDF((effectiveCap - meanNewIntake) / sd);
+  const targetWithBuffer = effectiveCap * (1 + settings.safetyBuffer);
+  const pOvershoot = 1 - normalCDF((targetWithBuffer - meanNewIntake) / sd);
+  const pFloorOvershoot = 1 - normalCDF((targetWithBuffer - floorIntake) / sdFloor);
+
+  const cycleConfidence = Math.min(1, phi / Math.max(0.05, settings.fullConfidencePhi));
+  const gatedPOvershoot = pOvershoot * cycleConfidence;
+  // Effective probability used by the recommender: the higher of the gated curve-based forecast
+  // and the floor-only analysis. The floor analysis bypasses the cycle gate because it doesn't
+  // depend on the curve at all — if the already-committed pipeline already exceeds cap,
+  // suspension is justified regardless of how early in the cycle we are.
+  const effectivePOvershoot = Math.max(gatedPOvershoot, pFloorOvershoot);
+
+  return {
+    phi, projectedFinalApps, meanNewIntake, meanNewIntakePreWithdrawal, sd,
+    floorIntake, sdFloor, pFloorOvershoot,
+    pMeetCap, pOvershoot, gatedPOvershoot, effectivePOvershoot, cycleConfidence,
+    targetWithBuffer, effectiveCap,
+    components: { fromFirms, fromOffersWaiting, fromAppsWaiting, fromFutureApps, fromICP: icp, fromFoundation: foundation, futureApps, appsWaiting, offersWaiting },
+  };
+}
+
+function recommend(f, inputs, settings) {
+  const weeksToStart = +inputs.weeksToStart || 0;
+  if (weeksToStart < settings.minWeeksWindow) {
+    return { zone: 'too_late', label: "Don't ask — too late",
+      detail: `You're inside the ${settings.minWeeksWindow}-week cutoff to the course start. Suspending applications now would have minimal effect on final enrolment, and the DvC will see the request as moot.`,
+      color: 'slate' };
+  }
+  const floorDrivesSubmit = f.pFloorOvershoot >= settings.submitThreshold;
+  const earlyCycleNote = f.cycleConfidence < 0.99
+    ? ` Cycle confidence is ${Math.round(f.cycleConfidence * 100)}% — only ${Math.round(f.phi * 100)}% of the application curve has played out, so the curve-based projection is discounted accordingly.`
+    : '';
+  if (floorDrivesSubmit) {
+    return { zone: 'submit', label: 'Submit the request',
+      detail: `Even if you stopped accepting new applications today, the pipeline already in hand (firms, pending offers, ICP/Foundation transfers) projects to ${f.floorIntake.toFixed(0)} enrolees — above cap × ${(1+settings.safetyBuffer).toFixed(2)} (${f.targetWithBuffer.toFixed(0)}). The DvC will see this as a clear case.`,
+      color: 'emerald' };
+  }
+  if (f.gatedPOvershoot >= settings.submitThreshold) {
+    return { zone: 'submit', label: 'Submit the request',
+      detail: `${Math.round(f.pOvershoot * 100)}% probability of exceeding cap by ${Math.round(settings.safetyBuffer * 100)}% or more.${earlyCycleNote} This is the kind of evidence the DvC wants to see before approving a suspension.`,
+      color: 'emerald' };
+  }
+  if (f.effectivePOvershoot >= settings.marginalThreshold) {
+    return { zone: 'marginal', label: 'Marginal — your call',
+      detail: `${Math.round(f.pOvershoot * 100)}% raw probability of meaningful overshoot, discounted to ${Math.round(f.gatedPOvershoot * 100)}% once cycle completeness is factored in (floor analysis: ${Math.round(f.pFloorOvershoot*100)}%).${earlyCycleNote} The DvC may push back that the forecast is not yet conclusive — consider waiting unless you have qualitative reasons to act now.`,
+      color: 'amber' };
+  }
+  if (f.pOvershoot > 0.6 && f.cycleConfidence < 0.5) {
+    return { zone: 'dont_ask', label: "Too early to ask",
+      detail: `The raw curve-based projection suggests ${Math.round(f.pOvershoot * 100)}% chance of overshoot, but only ${Math.round(f.phi * 100)}% of the application curve has played out and the pipeline already in hand isn't yet over cap. The DvC won't act on this little of the cycle.`,
+      color: 'slate' };
+  }
+  return { zone: 'dont_ask', label: "Don't ask yet",
+    detail: `Only ${Math.round(f.pOvershoot * 100)}% probability of meaningful overshoot. The DvC will worry that suspending now risks the course not even hitting cap.`,
+    color: 'slate' };
+}
+
+/* ===================== TAB SWITCHING ===================== */
+function switchTab(name) {
+  document.querySelectorAll('.tab-section').forEach(s => s.classList.add('hidden'));
+  document.getElementById('tab-' + name).classList.remove('hidden');
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    if (b.dataset.tab === name) {
+      b.classList.add('border-slate-900', 'text-slate-900');
+      b.classList.remove('border-transparent', 'text-slate-500');
+    } else {
+      b.classList.remove('border-slate-900', 'text-slate-900');
+      b.classList.add('border-transparent', 'text-slate-500');
+    }
+  });
+  if (name === 'predict') renderPredict();
+  if (name === 'profiles') renderProfiles();
+  if (name === 'settings') renderSettings();
+}
+document.querySelectorAll('.tab-btn').forEach(b => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
+/* ===================== PREDICT TAB ===================== */
+function renderPredict() {
+  const sel = document.getElementById('predict-profile');
+  const main = document.getElementById('predict-main');
+  const empty = document.getElementById('predict-noprofile');
+  if (!state.profiles.length) { main.classList.add('hidden'); empty.classList.remove('hidden'); return; }
+  main.classList.remove('hidden'); empty.classList.add('hidden');
+
+  sel.innerHTML = state.profiles.map(p => `<option value="${p.id}" ${p.id === state.currentProfileId ? 'selected' : ''}>${escapeHtml(p.name)} (cap ${p.cap})</option>`).join('');
+  sel.onchange = () => { state.currentProfileId = sel.value; saveState(); updatePredict(); };
+
+  const inputs = state.currentInputs;
+  document.getElementById('in-weeks').value = inputs.weeksToStart ?? 16;
+  document.getElementById('in-apps').value = inputs.currentApps ?? 60;
+  document.getElementById('in-offers').value = inputs.currentOffers ?? 40;
+  document.getElementById('in-firms').value = inputs.currentFirms ?? 20;
+  document.getElementById('in-icp').value = inputs.icpTransfers ?? 0;
+  document.getElementById('in-found').value = inputs.foundationTransfers ?? 0;
+  document.getElementById('in-intake').value = inputs.intakeMonth ?? 'September';
+  document.getElementById('in-year').value = inputs.academicYear ?? '';
+
+  const ids = ['in-weeks','in-apps','in-offers','in-firms','in-icp','in-found','in-intake','in-year'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    const evt = el.tagName === 'SELECT' ? 'change' : 'input';
+    el[evt === 'change' ? 'onchange' : 'oninput'] = () => {
+      state.currentInputs = {
+        weeksToStart: +document.getElementById('in-weeks').value,
+        currentApps: +document.getElementById('in-apps').value,
+        currentOffers: +document.getElementById('in-offers').value,
+        currentFirms: +document.getElementById('in-firms').value,
+        icpTransfers: +document.getElementById('in-icp').value,
+        foundationTransfers: +document.getElementById('in-found').value,
+        intakeMonth: document.getElementById('in-intake').value,
+        academicYear: document.getElementById('in-year').value,
+      };
+      saveState();
+      updatePredict();
+    };
+  });
+  updatePredict();
+}
+
+function updatePredict() {
+  const profile = state.profiles.find(p => p.id === state.currentProfileId);
+  if (!profile) return;
+  const inputs = {
+    weeksToStart: +document.getElementById('in-weeks').value,
+    currentApps: +document.getElementById('in-apps').value,
+    currentOffers: +document.getElementById('in-offers').value,
+    currentFirms: +document.getElementById('in-firms').value,
+    icpTransfers: +document.getElementById('in-icp').value,
+    foundationTransfers: +document.getElementById('in-found').value,
+    intakeMonth: document.getElementById('in-intake').value,
+    academicYear: document.getElementById('in-year').value,
+  };
+  const f = forecast(profile, inputs, state.settings);
+  const r = recommend(f, inputs, state.settings);
+
+  // Recommendation card colours
+  const colourMap = {
+    emerald: { card: 'bg-emerald-50 border-emerald-300', label: 'text-emerald-900', detail: 'text-emerald-800', eyebrow: 'text-emerald-700' },
+    amber:   { card: 'bg-amber-50 border-amber-300',   label: 'text-amber-900',   detail: 'text-amber-800',   eyebrow: 'text-amber-700' },
+    slate:   { card: 'bg-slate-100 border-slate-300',  label: 'text-slate-900',   detail: 'text-slate-700',   eyebrow: 'text-slate-600' },
+  };
+  const c = colourMap[r.color];
+  const card = document.getElementById('recommendation-card');
+  card.className = 'rounded-lg p-5 border ' + c.card;
+  const lbl = document.getElementById('rec-label'); lbl.textContent = r.label; lbl.className = 'text-2xl font-semibold mb-2 ' + c.label;
+  const det = document.getElementById('rec-detail'); det.textContent = r.detail; det.className = 'text-sm leading-relaxed ' + c.detail;
+  document.getElementById('rec-eyebrow').className = 'text-xs uppercase tracking-wider font-semibold mb-1 ' + c.eyebrow;
+  document.getElementById('rec-eyebrow').textContent = 'Recommendation';
+
+  document.getElementById('rec-meta').innerHTML = `
+    <div><div class="field-label">P(meet cap)</div><div class="text-lg font-semibold">${(f.pMeetCap*100).toFixed(0)}%</div></div>
+    <div><div class="field-label">P(exceed cap × ${(1+state.settings.safetyBuffer).toFixed(2)})</div><div class="text-lg font-semibold">${(f.pOvershoot*100).toFixed(0)}%</div></div>
+    <div><div class="field-label">Cycle confidence</div><div class="text-lg font-semibold">${(f.cycleConfidence*100).toFixed(0)}%</div></div>
+    <div><div class="field-label">Discounted P(overshoot)</div><div class="text-lg font-semibold">${(f.gatedPOvershoot*100).toFixed(0)}%</div></div>
+  `;
+
+  const capDisplay = profile.placementCourse && profile.repeatsImpactPlacement > 0
+    ? `${profile.cap} (effective ${f.effectiveCap} after ${profile.repeatsImpactPlacement} placement-occupying repeats)`
+    : `${profile.cap}`;
+  document.getElementById('forecast-summary').textContent =
+    `Forecast: ${f.meanNewIntake.toFixed(0)} new intake at first census (±${f.sd.toFixed(0)} sd). Cap ${capDisplay}. Buffer threshold ${f.targetWithBuffer.toFixed(0)}. Application curve ${(f.phi*100).toFixed(0)}% complete.`;
+
+  // Breakdown
+  const b = f.components;
+  const postWithdrawalNote = profile.expectedPostEnrolWithdrawal > 0
+    ? `<div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">Less typical post-enrol withdrawals (${Math.round(profile.expectedPostEnrolWithdrawal*100)}%)</span><span class="font-medium">−${(f.meanNewIntakePreWithdrawal - f.meanNewIntake).toFixed(1)}</span></div>`
+    : '';
+  document.getElementById('breakdown').innerHTML = `
+    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">Application curve completion</span><span class="font-medium">${(f.phi*100).toFixed(0)}%</span></div>
+    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">Projected final applications</span><span class="font-medium">${f.projectedFinalApps.toFixed(0)}</span></div>
+    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">From confirmed firms</span><span class="font-medium">${b.fromFirms.toFixed(1)}</span></div>
+    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">From offers awaiting firm (${b.offersWaiting})</span><span class="font-medium">${b.fromOffersWaiting.toFixed(1)}</span></div>
+    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">From apps awaiting offer (${b.appsWaiting})</span><span class="font-medium">${b.fromAppsWaiting.toFixed(1)}</span></div>
+    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">From future apps (${b.futureApps.toFixed(0)})</span><span class="font-medium">${b.fromFutureApps.toFixed(1)}</span></div>
+    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">ICP transfers</span><span class="font-medium">${b.fromICP.toFixed(1)}</span></div>
+    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">Foundation transfers</span><span class="font-medium">${b.fromFoundation.toFixed(1)}</span></div>
+    ${postWithdrawalNote}
+    <div class="flex justify-between py-1 font-semibold"><span>Expected new intake at first census</span><span>${f.meanNewIntake.toFixed(1)}</span></div>
+  `;
+
+  drawChart(f, profile);
+  renderFormDraft(profile, inputs, f, r);
+}
+
+function renderFormDraft(profile, inputs, f, r) {
+  const draft = document.getElementById('form-draft');
+  const intake = inputs.intakeMonth || 'September';
+  const year = inputs.academicYear || '(set academic year)';
+  const reason = profile.placementCourse
+    ? 'Recruitment suspension - full for specific category of student'
+    : 'Recruitment suspension - full for specific category of student';
+  draft.innerHTML = `
+    <div><div class="field-label">School</div><div class="font-medium">${escapeHtml(profile.school || '—')}</div></div>
+    <div><div class="field-label">Course Name & Code</div><div class="font-medium">${escapeHtml(profile.name)} ${escapeHtml(profile.code || '')}</div></div>
+    <div><div class="field-label">Academic Year</div><div class="font-medium">${escapeHtml(year)}</div></div>
+    <div><div class="field-label">Intake month</div><div class="font-medium">${escapeHtml(intake)}</div></div>
+    <div><div class="field-label">Reason for Request</div><div class="font-medium">${escapeHtml(reason)}</div></div>
+    <div><div class="field-label">Mandatory placement / Dual Award</div><div class="font-medium">${profile.placementCourse ? 'Yes' : 'No'}</div></div>
+    <div><div class="field-label">Absolute placement / Dual cap</div><div class="font-medium">${profile.placementCourse ? profile.cap : '—'}</div></div>
+    <div><div class="field-label">Typical Sept–Dec withdrawals</div><div class="font-medium">${Math.round(profile.expectedPostEnrolWithdrawal * profile.cap)} (${Math.round(profile.expectedPostEnrolWithdrawal*100)}% of cap)</div></div>
+    <div><div class="field-label">Expected ICP transfers</div><div class="font-medium">${inputs.icpTransfers || 0}</div></div>
+    <div><div class="field-label">Expected Foundation transfers</div><div class="font-medium">${inputs.foundationTransfers || 0}</div></div>
+    <div><div class="field-label">Average repeating students</div><div class="font-medium">${profile.expectedRepeats}${profile.placementCourse && profile.repeatsImpactPlacement ? ` (${profile.repeatsImpactPlacement} impacting placement)` : ''}</div></div>
+  `;
+
+  // Generate rationale paragraph
+  const lines = [];
+  lines.push(`${profile.name}${profile.code ? ' (' + profile.code + ')' : ''} has a cap of ${profile.cap}.`);
+  lines.push(`Current position: ${inputs.currentFirms} firm${inputs.currentFirms === 1 ? '' : 's'}, ${inputs.currentOffers} offers issued, ${inputs.currentApps} applications received with ${inputs.weeksToStart} week${inputs.weeksToStart === 1 ? '' : 's'} until ${intake} ${year} start.${inputs.icpTransfers ? ` ${inputs.icpTransfers} ICP transfer${inputs.icpTransfers === 1 ? '' : 's'} expected on top of this.` : ''}${inputs.foundationTransfers ? ` ${inputs.foundationTransfers} Foundation transfer${inputs.foundationTransfers === 1 ? '' : 's'} also expected.` : ''}`);
+  lines.push(`Forecast new intake at first census: ${f.meanNewIntake.toFixed(0)} (±${f.sd.toFixed(0)}), giving a ${Math.round(f.pOvershoot*100)}% probability of exceeding cap by ${Math.round(state.settings.safetyBuffer*100)}% or more.`);
+  if (profile.placementCourse && profile.repeatsImpactPlacement > 0) {
+    lines.push(`Placement capacity is further constrained by ${profile.repeatsImpactPlacement} repeating students occupying placement slots, reducing effective cap to ${f.effectiveCap}.`);
+  }
+  if (r.zone === 'submit') {
+    lines.push(`We are at the point where continued offer-making creates real over-enrolment risk. We are therefore requesting suspension of applications for this intake.`);
+  } else if (r.zone === 'marginal') {
+    lines.push(`We are approaching the point where continued offer-making may create over-enrolment risk and are requesting suspension to safeguard placement/teaching capacity.`);
+  } else {
+    lines.push(`(Note: the predictor currently rates this case as "${r.label}" — the rationale below is provided in case you decide to submit anyway.)`);
+  }
+  document.getElementById('rationale').value = lines.join('\n\n');
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'copy-rationale') {
+    const ta = document.getElementById('rationale');
+    if (!ta) return;
+    ta.select();
+    try { document.execCommand('copy'); flash('Rationale copied'); }
+    catch { navigator.clipboard?.writeText(ta.value).then(() => flash('Rationale copied')); }
+  }
+});
+
+function drawChart(f, profile) {
+  const ctx = document.getElementById('distChart');
+  const min = Math.max(0, f.meanEnrolment - 4 * f.sd);
+  const max = f.meanEnrolment + 4 * f.sd;
+  const step = Math.max(1, Math.round((max - min) / 80));
+  const xs = [], ys = [];
+  for (let x = min; x <= max; x += step) { xs.push(Math.round(x)); ys.push(normalPDF(x, f.meanEnrolment, f.sd)); }
+
+  const data = {
+    labels: xs,
+    datasets: [{
+      label: 'Forecast density',
+      data: ys,
+      borderColor: 'rgb(15, 23, 42)',
+      backgroundColor: 'rgba(15, 23, 42, 0.08)',
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+    }]
+  };
+
+  const annotations = [];
+  const capX = profile.cap;
+  const bufX = f.targetWithBuffer;
+
+  const config = {
+    type: 'line',
+    data,
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: false },
+      },
+      scales: {
+        x: { title: { display: true, text: 'Final enrolment' }, ticks: { maxTicksLimit: 10 } },
+        y: { display: false }
+      }
+    },
+    plugins: [{
+      id: 'capLines',
+      afterDraw(chart) {
+        const { ctx, chartArea, scales } = chart;
+        const xScale = scales.x;
+        function vline(value, color, label) {
+          const px = xScale.getPixelForValue(Math.round(value));
+          if (px < chartArea.left || px > chartArea.right) return;
+          ctx.save();
+          ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+          ctx.beginPath(); ctx.moveTo(px, chartArea.top); ctx.lineTo(px, chartArea.bottom); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = color; ctx.font = '11px sans-serif';
+          ctx.fillText(label, px + 4, chartArea.top + 12);
+          ctx.restore();
+        }
+        vline(capX, 'rgb(220, 38, 38)', `Cap (${profile.cap})`);
+        vline(bufX, 'rgb(217, 119, 6)', `Cap +${Math.round(state.settings.safetyBuffer*100)}% (${Math.round(bufX)})`);
+        vline(f.meanEnrolment, 'rgb(5, 150, 105)', `Mean (${Math.round(f.meanEnrolment)})`);
+      }
+    }]
+  };
+
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, config);
+}
+
+/* ===================== PROFILES TAB ===================== */
+function renderProfiles() {
+  const list = document.getElementById('profile-list');
+  if (!state.profiles.length) {
+    list.innerHTML = '<li class="text-sm text-slate-500">No courses yet.</li>';
+  } else {
+    list.innerHTML = state.profiles.map(p =>
+      `<li><button data-id="${p.id}" class="profile-row w-full text-left px-3 py-2 rounded ${p.id === state.currentProfileId ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}">${escapeHtml(p.name)}<div class="text-xs ${p.id === state.currentProfileId ? 'text-slate-300' : 'text-slate-500'}">cap ${p.cap} · repeats ${p.repeats}</div></button></li>`
+    ).join('');
+    list.querySelectorAll('.profile-row').forEach(btn => btn.onclick = () => { state.currentProfileId = btn.dataset.id; saveState(); renderProfiles(); });
+  }
+  renderProfileEditor();
+}
+
+function renderProfileEditor() {
+  const editor = document.getElementById('profile-editor');
+  const p = state.profiles.find(x => x.id === state.currentProfileId);
+  if (!p) { editor.innerHTML = '<p class="text-slate-500">Select or create a course.</p>'; return; }
+
+  const schoolOpts = SCHOOLS.map(s => `<option ${s === p.school ? 'selected' : ''}>${s}</option>`).join('');
+  editor.innerHTML = `
+    <div class="flex items-center justify-between mb-4">
+      <input id="ed-name" class="num-input text-lg font-semibold" value="${escapeAttr(p.name)}">
+      <button id="ed-delete" class="ml-4 text-sm text-red-600 hover:underline">Delete course</button>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4 mb-5">
+      <div><label class="field-label">Course code</label><input id="ed-code" type="text" class="num-input mt-1" value="${escapeAttr(p.code || '')}" placeholder="e.g. U2826FTC"></div>
+      <div><label class="field-label">School</label><select id="ed-school" class="num-input mt-1">${schoolOpts}</select></div>
+      <div><label class="field-label">Course cap (new intake)</label><input id="ed-cap" type="number" min="1" step="1" class="num-input mt-1" value="${p.cap}"></div>
+      <div>
+        <label class="field-label flex items-center gap-2">
+          <input id="ed-placement" type="checkbox" ${p.placementCourse ? 'checked' : ''}>
+          <span>Placement / Dual Award course</span>
+        </label>
+        <p class="text-xs text-slate-500 mt-1">If checked, repeating students with placements reduce effective cap.</p>
+      </div>
+      <div><label class="field-label">Repeats occupying placement slots</label><input id="ed-rip" type="number" min="0" step="1" class="num-input mt-1" value="${p.repeatsImpactPlacement}"></div>
+      <div><label class="field-label">Average repeating students (info)</label><input id="ed-repeats" type="number" min="0" step="1" class="num-input mt-1" value="${p.expectedRepeats}"></div>
+      <div><label class="field-label">Typical Sept–Dec withdrawal rate</label><input id="ed-postwd" type="number" min="0" max="1" step="0.01" class="num-input mt-1" value="${p.expectedPostEnrolWithdrawal}"></div>
+      <div><label class="field-label">Base coefficient of variation</label><input id="ed-cv" type="number" min="0" max="1" step="0.01" class="num-input mt-1" value="${p.baseCV}"></div>
+    </div>
+
+    <h3 class="font-semibold mt-2 mb-2">Conversion ladder</h3>
+    <div class="grid grid-cols-3 gap-4 mb-5">
+      <div><label class="field-label">Application → offer</label><input id="ed-a2o" type="number" min="0" max="1" step="0.01" class="num-input mt-1" value="${p.appToOffer}"></div>
+      <div><label class="field-label">Offer → firm</label><input id="ed-o2f" type="number" min="0" max="1" step="0.01" class="num-input mt-1" value="${p.offerToFirm}"></div>
+      <div><label class="field-label">Firm → enrolled (yield)</label><input id="ed-f2e" type="number" min="0" max="1" step="0.01" class="num-input mt-1" value="${p.firmToEnrolled}"></div>
+    </div>
+
+    <h3 class="font-semibold mt-2 mb-1">Application curve</h3>
+    <p class="text-xs text-slate-500 mb-2">Cumulative % of final-year applications expected by N weeks before course start. Edit rows to match your course's history.</p>
+    <table class="curve-table w-full text-sm mb-2">
+      <thead><tr class="text-left text-slate-500"><th class="font-medium pr-2">Weeks before start</th><th class="font-medium pr-2">Cumulative % of apps (0–1)</th><th></th></tr></thead>
+      <tbody id="curve-rows"></tbody>
+    </table>
+    <button id="curve-add" class="text-sm text-blue-600 hover:underline mb-4">+ Add row</button>
+
+    <div class="mt-4 flex gap-2">
+      <button id="ed-save" class="px-4 py-2 bg-slate-900 text-white rounded font-medium">Save changes</button>
+      <button id="ed-revert" class="px-4 py-2 border border-slate-300 rounded">Revert</button>
+    </div>
+  `;
+
+  renderCurveRows(p);
+
+  document.getElementById('ed-delete').onclick = () => {
+    if (!confirm(`Delete "${p.name}"?`)) return;
+    state.profiles = state.profiles.filter(x => x.id !== p.id);
+    state.currentProfileId = state.profiles[0]?.id || null;
+    saveState(); renderProfiles();
+  };
+  document.getElementById('curve-add').onclick = () => {
+    p.curve.push({ w: 0, p: 1.0 });
+    renderCurveRows(p);
+  };
+  document.getElementById('ed-save').onclick = () => {
+    p.name = document.getElementById('ed-name').value.trim() || 'Untitled course';
+    p.code = document.getElementById('ed-code').value.trim();
+    p.school = document.getElementById('ed-school').value;
+    p.cap = Math.max(1, +document.getElementById('ed-cap').value || 1);
+    p.placementCourse = document.getElementById('ed-placement').checked;
+    p.repeatsImpactPlacement = Math.max(0, +document.getElementById('ed-rip').value || 0);
+    p.expectedRepeats = Math.max(0, +document.getElementById('ed-repeats').value || 0);
+    p.expectedPostEnrolWithdrawal = clamp(+document.getElementById('ed-postwd').value, 0, 1);
+    p.baseCV = clamp(+document.getElementById('ed-cv').value, 0, 1);
+    p.appToOffer = clamp(+document.getElementById('ed-a2o').value, 0, 1);
+    p.offerToFirm = clamp(+document.getElementById('ed-o2f').value, 0, 1);
+    p.firmToEnrolled = clamp(+document.getElementById('ed-f2e').value, 0, 1);
+    // Read curve values
+    const rows = document.querySelectorAll('#curve-rows tr');
+    p.curve = [];
+    rows.forEach(tr => {
+      const w = +tr.querySelector('.crv-w').value;
+      const v = +tr.querySelector('.crv-p').value;
+      if (!isNaN(w) && !isNaN(v)) p.curve.push({ w, p: clamp(v, 0, 1) });
+    });
+    p.curve.sort((a, b) => b.w - a.w);
+    saveState();
+    renderProfiles();
+    flash('Saved');
+  };
+  document.getElementById('ed-revert').onclick = () => renderProfileEditor();
+}
+
+function renderCurveRows(p) {
+  const tbody = document.getElementById('curve-rows');
+  tbody.innerHTML = p.curve.map((row, i) => `
+    <tr data-i="${i}">
+      <td class="pr-2 py-1"><input class="crv-w" type="number" step="1" min="0" value="${row.w}"></td>
+      <td class="pr-2 py-1"><input class="crv-p" type="number" step="0.01" min="0" max="1" value="${row.p}"></td>
+      <td class="py-1"><button class="text-xs text-red-600 crv-del">remove</button></td>
+    </tr>
+  `).join('');
+  tbody.querySelectorAll('.crv-del').forEach((b, i) => b.onclick = () => { p.curve.splice(i, 1); renderCurveRows(p); });
+}
+
+document.getElementById('new-profile').onclick = () => {
+  const p = newProfile('New course ' + (state.profiles.length + 1));
+  state.profiles.push(p);
+  state.currentProfileId = p.id;
+  saveState();
+  renderProfiles();
+};
+
+/* ===================== SETTINGS TAB ===================== */
+function renderSettings() {
+  document.getElementById('s-buffer').value = state.settings.safetyBuffer;
+  document.getElementById('s-submit').value = state.settings.submitThreshold;
+  document.getElementById('s-marginal').value = state.settings.marginalThreshold;
+  document.getElementById('s-minweeks').value = state.settings.minWeeksWindow;
+  document.getElementById('s-amp').value = state.settings.uncertaintyAmplifier;
+  document.getElementById('s-phi').value = state.settings.fullConfidencePhi;
+}
+document.getElementById('save-settings').onclick = () => {
+  state.settings = {
+    safetyBuffer: clamp(+document.getElementById('s-buffer').value, 0, 0.5),
+    submitThreshold: clamp(+document.getElementById('s-submit').value, 0, 1),
+    marginalThreshold: clamp(+document.getElementById('s-marginal').value, 0, 1),
+    minWeeksWindow: Math.max(0, Math.round(+document.getElementById('s-minweeks').value)),
+    uncertaintyAmplifier: clamp(+document.getElementById('s-amp').value, 0, 5),
+    fullConfidencePhi: clamp(+document.getElementById('s-phi').value, 0.05, 1),
+  };
+  saveState();
+  flash('Settings saved');
+};
+document.getElementById('reset-settings').onclick = () => {
+  state.settings = { ...DEFAULT_SETTINGS };
+  saveState();
+  renderSettings();
+  flash('Reset');
+};
+
+/* ===================== UTILITIES ===================== */
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+function escapeAttr(s) { return escapeHtml(s); }
+function flash(msg) {
+  let el = document.getElementById('flash');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'flash';
+    el.className = 'fixed bottom-4 right-4 bg-slate-900 text-white text-sm px-3 py-2 rounded shadow';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.transition = 'opacity 0.4s'; el.style.opacity = '0'; }, 1400);
+}
+
+/* ===================== INIT ===================== */
+switchTab('predict');
+</script>
+</body>
+</html>
