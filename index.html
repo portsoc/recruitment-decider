@@ -17,9 +17,12 @@
 </head>
 <body class="bg-slate-50 min-h-screen text-slate-900">
 <div class="max-w-6xl mx-auto p-6">
-  <header class="mb-6">
-    <h1 class="text-3xl font-semibold">Recruitment Suspension Decider</h1>
-    <p class="text-slate-600 mt-1">Forecast cap-fill probability and decide whether a suspension request is worth making to the DvC.</p>
+  <header class="mb-6 flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-3xl font-semibold">Recruitment Suspension Decider</h1>
+      <p class="text-slate-600 mt-1">Forecast cap-fill probability and decide whether a suspension request is worth making to the DvC.</p>
+    </div>
+    <button id="reset-data-btn" class="text-sm px-3 py-2 border border-red-300 text-red-700 rounded hover:bg-red-50">Reset data</button>
   </header>
 
   <nav class="flex gap-1 mb-6 border-b border-slate-200">
@@ -206,6 +209,18 @@
   </section>
 </div>
 
+<dialog id="reset-data-dialog" class="rounded-lg p-0 w-full max-w-md backdrop:bg-slate-900/40">
+  <div class="p-5 bg-white rounded-lg border border-slate-200">
+    <h2 class="text-lg font-semibold text-slate-900">Reset all saved data?</h2>
+    <p class="text-sm text-slate-600 mt-2">This will permanently remove all saved course profiles, prediction inputs, and DvC settings from this browser.</p>
+    <p class="text-sm text-red-700 mt-2 font-medium">This action cannot be undone.</p>
+    <div class="mt-5 flex justify-end gap-2">
+      <button id="reset-data-cancel" class="px-3 py-2 border border-slate-300 rounded text-sm">Cancel</button>
+      <button id="reset-data-confirm" class="px-3 py-2 bg-red-600 text-white rounded text-sm">Yes, reset data</button>
+    </div>
+  </div>
+</dialog>
+
 <script>
 /* ===================== STATE / STORAGE ===================== */
 // Math, defaults and data-model helpers live in forecast.js (loaded above).
@@ -218,6 +233,15 @@ const {
 
 const STORAGE_KEY = 'recruitment-decider-state-v1';
 
+function defaultState() {
+  return {
+    profiles: [newProfile('Example course')],
+    settings: { ...DEFAULT_SETTINGS },
+    currentInputs: {},
+    currentProfileId: null,
+  };
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -229,10 +253,19 @@ function loadState() {
       return parsed;
     }
   } catch (e) { console.warn('Bad saved state', e); }
-  return { profiles: [newProfile('Example course')], settings: { ...DEFAULT_SETTINGS }, currentInputs: {}, currentProfileId: null };
+  return defaultState();
 }
 
 function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+
+function resetSavedState() {
+  localStorage.removeItem(STORAGE_KEY);
+  state = defaultState();
+  if (!state.currentProfileId && state.profiles.length) state.currentProfileId = state.profiles[0].id;
+  if (chart) { chart.destroy(); chart = null; }
+  switchTab('predict');
+  flash('Saved data reset');
+}
 
 let state = loadState();
 if (!state.currentProfileId && state.profiles.length) state.currentProfileId = state.profiles[0].id;
@@ -605,6 +638,22 @@ document.getElementById('new-profile').onclick = () => {
   saveState();
   renderProfiles();
 };
+
+/* ===================== RESET DATA DIALOG ===================== */
+const resetDialog = document.getElementById('reset-data-dialog');
+document.getElementById('reset-data-btn').onclick = () => {
+  if (typeof resetDialog.showModal === 'function') resetDialog.showModal();
+};
+document.getElementById('reset-data-cancel').onclick = () => resetDialog.close();
+document.getElementById('reset-data-confirm').onclick = () => {
+  resetDialog.close();
+  resetSavedState();
+};
+resetDialog.addEventListener('click', (e) => {
+  const rect = resetDialog.getBoundingClientRect();
+  const inBounds = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+  if (!inBounds) resetDialog.close();
+});
 
 /* ===================== SETTINGS TAB ===================== */
 function renderSettings() {
