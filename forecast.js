@@ -50,12 +50,39 @@
       offerToFirm: 0.35,
       firmToEnrolled: 0.88,
       baseCV: 0.08,
+      startDates: {},  // intake month -> 'YYYY-MM-DD' course start date
     };
+  }
+
+  // True while a profile still carries the placeholder curve rather than the course's own history.
+  function isDefaultCurve(curve) {
+    return Array.isArray(curve) && curve.length === DEFAULT_CURVE.length
+      && curve.every((r, i) => +r.w === DEFAULT_CURVE[i].w && +r.p === DEFAULT_CURVE[i].p);
+  }
+
+  // Whole weeks from today to a 'YYYY-MM-DD' date, or null if the date is missing, invalid or past.
+  function weeksUntil(dateStr, today = new Date()) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || '');
+    if (!m) return null;
+    const target = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+    const from = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+    if (!Number.isFinite(target) || target < from) return null;
+    return Math.round((target - from) / (7 * 86400000));
+  }
+
+  // Coefficient of variation (sample sd ÷ mean) of past years' final new intake.
+  function cvFromHistory(values) {
+    const xs = (values || []).map(Number).filter(v => Number.isFinite(v) && v > 0);
+    if (xs.length < 2) return null;
+    const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const variance = xs.reduce((a, b) => a + (b - mean) ** 2, 0) / (xs.length - 1);
+    return Math.sqrt(variance) / mean;
   }
 
   function migrateProfile(p) {
     const d = newProfile();
     return { ...d, ...p,
+      startDates: { ...(p.startDates || {}) },
       code: p.code ?? '',
       school: p.school ?? SCHOOLS[0],
       placementCourse: p.placementCourse ?? false,
@@ -151,7 +178,7 @@
     const weeksToStart = +inputs.weeksToStart || 0;
     if (weeksToStart < settings.minWeeksWindow) {
       return { zone: 'too_late', label: "Don't ask — too late",
-        detail: `You're inside the ${settings.minWeeksWindow}-week cutoff to the course start. Suspending applications now would have minimal effect on final enrolment, and the DvC will see the request as moot.`,
+        detail: `You're inside the ${settings.minWeeksWindow}-week cutoff to the course start. Suspending applications now would have minimal effect on final enrolment, so a request is unlikely to be worthwhile.`,
         color: 'slate' };
     }
     const floorDrivesSubmit = f.pFloorOvershoot >= settings.submitThreshold;
@@ -160,33 +187,118 @@
       : '';
     if (floorDrivesSubmit) {
       return { zone: 'submit', label: 'Submit the request',
-        detail: `Even if you stopped accepting new applications today, the pipeline already in hand (firms, pending offers, ICP/Foundation transfers) projects to ${f.floorIntake.toFixed(0)} enrolees — above cap × ${(1+settings.safetyBuffer).toFixed(2)} (${f.targetWithBuffer.toFixed(0)}). The DvC will see this as a clear case.`,
+        detail: `Even if you stopped accepting new applications today, the pipeline already in hand (firms, pending offers, ICP/Foundation transfers) projects to ${f.floorIntake.toFixed(0)} enrolees — above cap × ${(1+settings.safetyBuffer).toFixed(2)} (${f.targetWithBuffer.toFixed(0)}). This is a clear case for suspension.`,
         color: 'emerald' };
     }
     if (f.gatedPOvershoot >= settings.submitThreshold) {
       return { zone: 'submit', label: 'Submit the request',
-        detail: `${Math.round(f.pOvershoot * 100)}% probability of exceeding cap by ${Math.round(settings.safetyBuffer * 100)}% or more.${earlyCycleNote} This is the kind of evidence the DvC wants to see before approving a suspension.`,
+        detail: `${Math.round(f.pOvershoot * 100)}% probability of exceeding cap by ${Math.round(settings.safetyBuffer * 100)}% or more.${earlyCycleNote} This is strong evidence to support a suspension request.`,
         color: 'emerald' };
     }
     if (f.effectivePOvershoot >= settings.marginalThreshold) {
       return { zone: 'marginal', label: 'Marginal — your call',
-        detail: `${Math.round(f.pOvershoot * 100)}% raw probability of meaningful overshoot, discounted to ${Math.round(f.gatedPOvershoot * 100)}% once cycle completeness is factored in (floor analysis: ${Math.round(f.pFloorOvershoot*100)}%).${earlyCycleNote} The DvC may push back that the forecast is not yet conclusive — consider waiting unless you have qualitative reasons to act now.`,
+        detail: `${Math.round(f.pOvershoot * 100)}% raw probability of meaningful overshoot, discounted to ${Math.round(f.gatedPOvershoot * 100)}% once cycle completeness is factored in (floor analysis: ${Math.round(f.pFloorOvershoot*100)}%).${earlyCycleNote} The forecast is not yet conclusive — consider waiting unless you have qualitative reasons to act now.`,
         color: 'amber' };
     }
     if (f.pOvershoot > 0.6 && f.cycleConfidence < 0.5) {
       return { zone: 'dont_ask', label: "Too early to ask",
-        detail: `The raw curve-based projection suggests ${Math.round(f.pOvershoot * 100)}% chance of overshoot, but only ${Math.round(f.phi * 100)}% of the application curve has played out and the pipeline already in hand isn't yet over cap. The DvC won't act on this little of the cycle.`,
+        detail: `The raw curve-based projection suggests ${Math.round(f.pOvershoot * 100)}% chance of overshoot, but only ${Math.round(f.phi * 100)}% of the application curve has played out and the pipeline already in hand isn't yet over cap. That is too little of the cycle to justify a suspension request.`,
         color: 'slate' };
     }
     return { zone: 'dont_ask', label: "Don't ask yet",
-      detail: `Only ${Math.round(f.pOvershoot * 100)}% probability of meaningful overshoot. The DvC will worry that suspending now risks the course not even hitting cap.`,
+      detail: `Only ${Math.round(f.pOvershoot * 100)}% probability of meaningful overshoot. Suspending now risks the course not even hitting cap.`,
       color: 'slate' };
+  }
+
+  // A suspension request travels from the AHS to the ADS inside a link, so the ADS sees the
+  // same course profile, inputs and thresholds without sharing any storage. Values are packed
+  // positionally to keep the link short enough for a mailto: body.
+  const SETTING_KEYS = ['safetyBuffer', 'submitThreshold', 'marginalThreshold',
+                        'minWeeksWindow', 'uncertaintyAmplifier', 'fullConfidencePhi'];
+
+  function encodeRequest(profile, inputs, settings, meta = {}) {
+    const payload = {
+      v: 1,
+      d: meta.date || new Date().toISOString().slice(0, 10),
+      f: String(meta.from || '').slice(0, 80),
+      n: String(meta.note || '').slice(0, 400),
+      p: [profile.name, profile.code || '', profile.school, profile.cap, profile.placementCourse ? 1 : 0,
+          profile.repeatsImpactPlacement, profile.expectedRepeats, profile.expectedPostEnrolWithdrawal,
+          profile.appToOffer, profile.offerToFirm, profile.firmToEnrolled, profile.baseCV,
+          profile.curve.flatMap(r => [r.w, r.p])],
+      i: [inputs.weeksToStart, inputs.currentApps, inputs.currentOffers, inputs.currentFirms,
+          inputs.icpTransfers, inputs.foundationTransfers, inputs.intakeMonth || 'September', inputs.academicYear || ''],
+      s: SETTING_KEYS.map(k => settings[k]),
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(payload));
+    let bin = '';
+    bytes.forEach(b => { bin += String.fromCharCode(b); });
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  // The link is untrusted input: every value is coerced and clamped before use.
+  function decodeRequest(encoded) {
+    try {
+      if (!/^[A-Za-z0-9_-]+$/.test(encoded || '')) return null;
+      const bin = atob(encoded.replace(/-/g, '+').replace(/_/g, '/'));
+      const raw = JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0))));
+      if (!raw || raw.v !== 1 || !Array.isArray(raw.p) || !Array.isArray(raw.i) || !Array.isArray(raw.s)) return null;
+
+      const num = (v, lo, hi, d = 0) => Number.isFinite(+v) && v !== null && v !== '' ? Math.max(lo, Math.min(hi, +v)) : d;
+      const str = (v, max) => String(v ?? '').slice(0, max);
+      const p = raw.p, i = raw.i;
+
+      const flat = Array.isArray(p[12]) ? p[12].slice(0, 120) : [];
+      const curve = [];
+      for (let k = 0; k + 1 < flat.length; k += 2) curve.push({ w: num(flat[k], 0, 104), p: num(flat[k + 1], 0, 1) });
+
+      const profile = {
+        id: 'request',
+        name: str(p[0], 120) || 'Untitled course',
+        code: str(p[1], 40),
+        school: SCHOOLS.includes(p[2]) ? p[2] : SCHOOLS[0],
+        cap: Math.round(num(p[3], 1, 100000, 30)),
+        placementCourse: !!p[4],
+        repeatsImpactPlacement: Math.round(num(p[5], 0, 100000)),
+        expectedRepeats: Math.round(num(p[6], 0, 100000)),
+        expectedPostEnrolWithdrawal: num(p[7], 0, 1),
+        appToOffer: num(p[8], 0, 1),
+        offerToFirm: num(p[9], 0, 1),
+        firmToEnrolled: num(p[10], 0, 1),
+        baseCV: num(p[11], 0, 1),
+        curve: curve.length ? curve : DEFAULT_CURVE.map(r => ({ ...r })),
+      };
+      const inputs = {
+        weeksToStart: num(i[0], 0, 104),
+        currentApps: num(i[1], 0, 1e6),
+        currentOffers: num(i[2], 0, 1e6),
+        currentFirms: num(i[3], 0, 1e6),
+        icpTransfers: num(i[4], 0, 1e6),
+        foundationTransfers: num(i[5], 0, 1e6),
+        intakeMonth: INTAKE_MONTHS.includes(i[6]) ? i[6] : 'September',
+        academicYear: str(i[7], 20),
+      };
+      const settings = { ...DEFAULT_SETTINGS };
+      SETTING_KEYS.forEach((k, idx) => { settings[k] = num(raw.s[idx], 0, 100, DEFAULT_SETTINGS[k]); });
+
+      const from = str(raw.f, 80);
+      return {
+        profile, inputs, settings,
+        from: /^[^\s@<>"']+@[^\s@<>"']+$/.test(from) ? from : '',
+        note: str(raw.n, 400),
+        date: /^\d{4}-\d{2}-\d{2}$/.test(raw.d) ? raw.d : '',
+      };
+    } catch (e) {
+      return null;
+    }
   }
 
   return {
     SCHOOLS, INTAKE_MONTHS, DEFAULT_CURVE, DEFAULT_SETTINGS,
     newProfile, migrateProfile,
+    isDefaultCurve, weeksUntil, cvFromHistory,
     normalCDF, normalPDF, curveLookup,
     forecast, recommend,
+    encodeRequest, decodeRequest,
   };
 }));

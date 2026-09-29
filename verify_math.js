@@ -84,5 +84,62 @@ allPass &= run('9. Same Dental Hygiene state but at 22 weeks out (floor analysis
   { weeksToStart: 22, currentApps: 110, currentOffers: 50, currentFirms: 20, icpTransfers: 2, foundationTransfers: 0 },
   'SUBMIT');
 
+// The AHS → ADS link must reproduce the forecast exactly, and must survive a tampered link.
+console.log('\n--- Suspension request link ---\n');
+const { encodeRequest, decodeRequest } = require('./forecast.js');
+
+function check(name, pass) {
+  console.log(`${pass ? '✓' : '✗'} ${name}`);
+  return pass;
+}
+
+const linkProfile = { ...dhProfile, name: 'BSc Dental Hygiene & Thérapy', code: 'U2826FTC', school: 'DHCP' };
+const linkInputs = { weeksToStart: 6, currentApps: 110, currentOffers: 50, currentFirms: 20,
+  icpTransfers: 2, foundationTransfers: 0, intakeMonth: 'September', academicYear: '2026/27' };
+const linkSettings = { ...DEFAULT_SETTINGS, safetyBuffer: 0.1 };
+const encoded = encodeRequest(linkProfile, linkInputs, linkSettings,
+  { from: 'a.person@example.ac.uk', note: 'Interviews finish next week', date: '2026-05-01' });
+const decoded = decodeRequest(encoded);
+
+const before = forecast(linkProfile, linkInputs, linkSettings);
+const after = decoded && forecast(decoded.profile, decoded.inputs, decoded.settings);
+allPass &= check('10. Link round-trip gives the same forecast and recommendation',
+  !!decoded && after.meanNewIntake === before.meanNewIntake && after.sd === before.sd
+  && after.pOvershoot === before.pOvershoot
+  && recommend(after, decoded.inputs, decoded.settings).zone === recommend(before, linkInputs, linkSettings).zone);
+allPass &= check('11. Link round-trip keeps course name, sender, note and date',
+  !!decoded && decoded.profile.name === linkProfile.name && decoded.from === 'a.person@example.ac.uk'
+  && decoded.note === 'Interviews finish next week' && decoded.date === '2026-05-01');
+allPass &= check(`12. Link payload is short enough for an email (${encoded.length} chars)`, encoded.length < 700);
+allPass &= check('13. Garbage links are rejected',
+  decodeRequest('not a link!') === null && decodeRequest('') === null && decodeRequest('e30') === null);
+
+const tampered = Buffer.from(JSON.stringify({ v: 1, d: 'x', f: '<img src=x>', n: 5,
+  p: ['<b>x</b>', '', 'NOPE', '<script>', 1, -5, 'a', 9, 9, 9, 9, 9, [1, 2, 'x']],
+  i: ['<i>', -1, null, {}, [], 'z', 'Smarch', 7], s: ['x'] })).toString('base64url');
+const t = decodeRequest(tampered);
+allPass &= check('14. Tampered link values are coerced to safe numbers and known options',
+  !!t && t.profile.cap === 30 && t.profile.school === 'DHCP' && t.profile.repeatsImpactPlacement === 0
+  && t.profile.appToOffer === 1 && t.inputs.weeksToStart === 0 && t.inputs.currentApps === 0
+  && t.inputs.intakeMonth === 'September' && t.from === '' && t.date === ''
+  && t.settings.safetyBuffer === DEFAULT_SETTINGS.safetyBuffer
+  && Number.isFinite(forecast(t.profile, t.inputs, t.settings).meanNewIntake));
+
+const { weeksUntil, cvFromHistory, isDefaultCurve, newProfile } = require('./forecast.js');
+const today = new Date(2026, 8, 29); // 29 Sep 2026
+allPass &= check('15. Weeks until start is worked out from the start date',
+  weeksUntil('2027-01-19', today) === 16 && weeksUntil('2026-09-29', today) === 0
+  && weeksUntil('2026-10-13', today) === 2);
+allPass &= check('16. Past, missing or malformed start dates give no automatic weeks',
+  weeksUntil('2026-09-28', today) === null && weeksUntil('', today) === null
+  && weeksUntil('19/01/2027', today) === null && weeksUntil(undefined, today) === null);
+const cv = cvFromHistory([28, 31, 30, 33, 27]);
+allPass &= check(`17. Variability from past intakes 28,31,30,33,27 is about 0.08 (${cv.toFixed(3)})`,
+  Math.abs(cv - 0.0808) < 0.001 && cvFromHistory([30]) === null && cvFromHistory([]) === null);
+allPass &= check('18. Placeholder curve is recognised, an edited curve is not',
+  isDefaultCurve(newProfile().curve)
+  && !isDefaultCurve(newProfile().curve.map((r, i) => i === 3 ? { ...r, p: 0.35 } : r)));
+
+console.log('');
 console.log(allPass ? 'ALL PASS' : 'SOME FAIL — investigate');
 process.exit(allPass ? 0 : 1);

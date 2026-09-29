@@ -1,0 +1,68 @@
+rules_version = '2';
+
+// Access is limited to the named port.ac.uk accounts, signed in with Google.
+// Keep these lists in step with ADS_EMAIL, AHS_EMAILS and ADMIN_EMAIL in index.html.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    // ADS and admin: decide on requests and own the shared settings.
+    function isDecider() {
+      return signedIn() && request.auth.token.email in [
+        'kirsten.farrell@port.ac.uk',
+        'matt.dennis@port.ac.uk'
+      ];
+    }
+
+    function isMember() {
+      return isDecider() || (signedIn() && request.auth.token.email in [
+        'tracy.wallis@port.ac.uk',
+        'roger.moore@port.ac.uk',
+        'simon.archer@port.ac.uk',
+        'fiona.myers@port.ac.uk'
+      ]);
+    }
+
+    // Course profiles: shared by everyone on the list.
+    match /profiles/{profileId} {
+      allow read, write: if isMember();
+    }
+
+    // Suspension settings and key decision dates: everyone reads, ADS and admin change.
+    match /shared/{docId} {
+      allow read: if isMember();
+      allow write: if isDecider();
+    }
+
+    // Course and figures of a suspension request. The emailed link carries only the document
+    // id, so the figures cannot be read without signing in. Anyone on the list can raise a
+    // request in their own name; once raised it cannot be altered.
+    match /requestDetails/{requestId} {
+      allow read: if isMember();
+      allow create: if isMember()
+        && request.resource.data.keys().hasOnly(['payload', 'from', 'course', 'createdAt'])
+        && request.resource.data.from == request.auth.token.email
+        && request.resource.data.payload is string
+        && request.resource.data.payload.size() < 4000
+        && request.resource.data.course is string
+        && request.resource.data.course.size() < 200;
+      allow update: if false;
+      allow delete: if isDecider();
+    }
+
+    // Outcome recorded against a suspension request: everyone reads, ADS and admin record.
+    match /requests/{requestKey} {
+      allow read: if isMember();
+      allow write: if isDecider();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -5,6 +5,9 @@
 <title>Recruitment Suspension Decider</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script src="forecast.js"></script>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif; }
@@ -16,19 +19,41 @@
 </style>
 </head>
 <body class="bg-slate-50 min-h-screen text-slate-900">
-<div class="max-w-6xl mx-auto p-6">
+<!-- Shown until a permitted account is signed in and the shared data has loaded -->
+<div id="auth-screen" class="max-w-md mx-auto p-6 mt-16">
+  <div class="bg-white border border-slate-200 rounded-lg p-6">
+    <h1 class="text-2xl font-semibold">Recruitment Suspension Decider</h1>
+    <p id="auth-message" class="text-sm text-slate-600 mt-2">Checking sign-in…</p>
+    <p id="auth-error" class="hidden text-sm text-red-700 mt-2"></p>
+    <button id="auth-signin" class="hidden mt-4 px-4 py-2 bg-slate-900 text-white rounded font-medium">Sign in with Google</button>
+    <button id="auth-signout" class="hidden mt-4 px-4 py-2 border border-slate-300 rounded text-sm">Use a different account</button>
+    <p class="text-xs text-slate-500 mt-5">Problems signing in? Contact <a class="underline" href="mailto:matt.dennis@port.ac.uk">matt.dennis@port.ac.uk</a>.</p>
+  </div>
+</div>
+
+<div id="app" class="hidden max-w-6xl mx-auto p-6">
   <header class="mb-6 flex items-start justify-between gap-4">
     <div>
       <h1 class="text-3xl font-semibold">Recruitment Suspension Decider</h1>
-      <p class="text-slate-600 mt-1">Forecast cap-fill probability and decide whether a suspension request is worth making to the DvC.</p>
+      <p class="text-slate-600 mt-1">Forecast cap-fill probability and decide whether a suspension request is worth making.</p>
     </div>
-    <button id="reset-data-btn" class="text-sm px-3 py-2 border border-red-300 text-red-700 rounded hover:bg-red-50">Reset data</button>
+    <div class="text-right text-sm shrink-0">
+      <div id="user-email" class="text-slate-600"></div>
+      <button id="sign-out" class="text-blue-600 hover:underline">Sign out</button>
+    </div>
   </header>
 
-  <nav class="flex gap-1 mb-6 border-b border-slate-200">
-    <button data-tab="predict"  class="tab-btn px-4 py-2 border-b-2 font-medium">Predict</button>
+  <div id="legacy-banner" class="hidden mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900"></div>
+
+  <div id="request-banner" class="hidden mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-900"></div>
+  <div id="link-error" class="hidden mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">
+    This suspension request link is incomplete or damaged, or the request has been removed, so the course figures could not be loaded. Ask the sender to send it again.
+  </div>
+
+  <nav id="main-nav" class="flex gap-1 mb-6 border-b border-slate-200">
+    <button data-tab="predict" class="tab-btn px-4 py-2 border-b-2 font-medium">Predict</button>
     <button data-tab="profiles" class="tab-btn px-4 py-2 border-b-2 font-medium">Course profiles</button>
-    <button data-tab="settings" class="tab-btn px-4 py-2 border-b-2 font-medium">DvC settings</button>
+    <button data-tab="settings" class="tab-btn px-4 py-2 border-b-2 font-medium">Suspension settings</button>
   </nav>
 
   <!-- =================== PREDICT TAB =================== -->
@@ -45,12 +70,13 @@
 
       <div class="grid md:grid-cols-2 gap-6">
         <!-- Inputs -->
-        <div class="bg-white border border-slate-200 rounded-lg p-5">
+        <div id="predict-inputs" class="bg-white border border-slate-200 rounded-lg p-5">
           <h2 class="text-lg font-semibold mb-4">Where things stand now</h2>
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="field-label">Weeks until course start</label>
               <input id="in-weeks" type="number" min="0" step="1" class="num-input mt-1">
+              <p id="weeks-hint" class="text-xs text-slate-500 mt-1"></p>
             </div>
             <div>
               <label class="field-label">Applications received</label>
@@ -83,6 +109,7 @@
               <input id="in-year" type="text" class="num-input mt-1" placeholder="e.g. 2026/27">
             </div>
           </div>
+          <div id="key-date-note" class="hidden mt-4 p-3 bg-slate-50 border border-slate-200 rounded text-sm"></div>
           <p class="text-xs text-slate-500 mt-3">Conversion ratios and post-enrolment withdrawal come from the course profile (you enter these from PowerBI).</p>
         </div>
 
@@ -92,6 +119,20 @@
           <div id="rec-label" class="text-2xl font-semibold mb-2">—</div>
           <div id="rec-detail" class="text-sm leading-relaxed">—</div>
           <div id="rec-meta" class="mt-4 grid grid-cols-2 gap-3 text-sm"></div>
+
+          <!-- Notify ADS: shown to the AHS only when the recommendation is submit or marginal -->
+          <div id="notify-panel" class="hidden mt-5 p-4 bg-white border border-slate-200 rounded-lg text-slate-900">
+            <h3 class="font-semibold">Ask the ADS to decide</h3>
+            <p class="text-xs text-slate-500 mt-0.5 mb-3">Opens an email to the ADS with a link to this screen, with this course and these figures filled in. The figures are saved in the tool, not in the link, so they can only be seen after signing in.</p>
+            <p class="text-sm mb-3"><span class="field-label">Sending as</span> <span id="notify-from" class="font-medium"></span></p>
+            <label class="field-label" for="notify-note">Note for the ADS (optional)</label>
+            <textarea id="notify-note" rows="2" maxlength="400" class="num-input mt-1 w-full text-sm" placeholder="Anything the figures don't show"></textarea>
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+              <button id="notify-ads" class="px-4 py-2 bg-slate-900 text-white rounded font-medium text-sm">Notify ADS</button>
+              <button id="notify-gmail" class="px-3 py-2 border border-slate-300 rounded text-sm hover:bg-slate-50">Open in Gmail</button>
+              <button id="notify-copy" class="px-3 py-2 border border-slate-300 rounded text-sm hover:bg-slate-50">Copy link</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -104,25 +145,32 @@
 
       <!-- Diagnostic breakdown -->
       <div class="bg-white border border-slate-200 rounded-lg p-5 mt-6">
-        <h2 class="text-lg font-semibold mb-3">How the forecast breaks down</h2>
-        <div id="breakdown" class="grid md:grid-cols-2 gap-x-8 gap-y-2 text-sm"></div>
+        <h2 class="text-lg font-semibold mb-1">How the forecast breaks down</h2>
+        <p class="text-sm text-slate-600 mb-3">Each line takes a group of applicants at a different stage of the pipeline and multiplies it by the chance that group ends up enrolled. The counts come from the figures you entered above; the percentages come from the course profile.</p>
+        <div id="breakdown" class="text-sm"></div>
       </div>
 
-      <!-- Form draft -->
-      <div class="bg-white border border-slate-200 rounded-lg p-5 mt-6">
+      <!-- Form draft: ADS only, shown when the page is opened from a suspension request link -->
+      <div id="form-draft-card" class="hidden bg-white border border-slate-200 rounded-lg p-5 mt-6">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="text-lg font-semibold">Microsoft Form draft</h2>
+          <h2 class="text-lg font-semibold">Recruitment suspension email draft</h2>
           <button id="copy-rationale" class="text-sm px-3 py-1 border border-slate-300 rounded hover:bg-slate-50">Copy rationale</button>
         </div>
-        <p class="text-sm text-slate-600 mb-4">Pre-filled values you'll paste into the central recruitment-suspension form. The rationale paragraph is auto-generated — review before submitting.</p>
+        <p class="text-sm text-slate-600 mb-4">Pre-filled values to paste into the central recruitment-suspension Microsoft Form. The rationale paragraph is auto-generated — review before submitting.</p>
         <div id="form-draft" class="grid md:grid-cols-2 gap-x-8 gap-y-2 text-sm"></div>
         <div class="mt-4">
           <label class="field-label">Rationale for request</label>
           <textarea id="rationale" rows="6" class="num-input mt-1 font-mono text-sm" style="white-space: pre-wrap;"></textarea>
         </div>
+
+        <div id="done-panel" class="mt-5 pt-4 border-t border-slate-200"></div>
       </div>
     </div>
   </section>
+
+  <footer class="mt-10 text-xs text-slate-500">
+    Problems with this tool? Contact <a id="admin-contact" class="underline"></a>.
+  </footer>
 
   <!-- =================== PROFILES TAB =================== -->
   <section id="tab-profiles" class="tab-section hidden">
@@ -144,13 +192,15 @@
   <!-- =================== SETTINGS TAB =================== -->
   <section id="tab-settings" class="tab-section hidden">
     <div class="bg-white border border-slate-200 rounded-lg p-5 max-w-2xl">
-      <h2 class="text-lg font-semibold mb-1">How the DvC weighs a suspension request</h2>
-      <p class="text-sm text-slate-600 mb-5">These thresholds tune how the tool guesses whether the DvC will approve a request. Calibrate them against real outcomes over time.</p>
+      <h2 class="text-lg font-semibold mb-1">How a suspension request is weighed</h2>
+      <p class="text-sm text-slate-600 mb-5">These thresholds tune how the tool judges whether a suspension request is justified. Calibrate them against real outcomes over time.</p>
+      <p id="settings-readonly" class="hidden text-sm p-3 mb-5 bg-slate-50 border border-slate-200 rounded">These settings and key dates are shared by everyone using the tool. Only the ADS can change them.</p>
 
       <div class="space-y-5">
         <div>
           <label class="field-label">Safety buffer above cap</label>
-          <p class="text-xs text-slate-500 mb-2">The DvC's real concern is over-enrolment. Probability is measured against cap × (1 + buffer), not the cap itself.</p>
+          <p class="text-xs text-slate-500 mb-2">Over-enrolment is a concern. Probability is measured against cap × (1 + buffer), not the cap itself.</p>
+          <p class="text-xs text-slate-500 mb-2">This is separate from expected withdrawals. The forecast already takes off each course's typical withdrawals before it is compared with the cap, so a course can enrol above cap by its expected withdrawals without triggering a recommendation. The buffer is extra headroom on top of that. Set it to 0 if going over cap by expected withdrawals is all that should be allowed.</p>
           <div class="flex items-center gap-3">
             <input id="s-buffer" type="number" step="0.01" min="0" max="0.5" class="num-input max-w-[8rem]">
             <span class="text-sm text-slate-600">(e.g. 0.05 = 5% above cap)</span>
@@ -206,20 +256,20 @@
       <button id="save-settings" class="mt-6 px-4 py-2 bg-slate-900 text-white rounded font-medium">Save settings</button>
       <button id="reset-settings" class="mt-6 ml-2 px-4 py-2 border border-slate-300 rounded">Reset to defaults</button>
     </div>
+
+    <div class="bg-white border border-slate-200 rounded-lg p-5 max-w-2xl mt-6">
+      <h2 class="text-lg font-semibold mb-1">Key decision dates</h2>
+      <p class="text-sm text-slate-600 mb-3">Dates by which a suspension decision needs to be made. The next date for the chosen intake is shown on the Predict screen. Course start dates are set separately, on each course profile.</p>
+      <table class="curve-table w-full text-sm mb-2">
+        <thead><tr class="text-left text-slate-500"><th class="font-medium pr-2">Date</th><th class="font-medium pr-2">Intake</th><th class="font-medium pr-2">What is due</th><th></th></tr></thead>
+        <tbody id="keydate-rows"></tbody>
+      </table>
+      <p id="keydate-empty" class="hidden text-sm text-slate-500 mb-2">No key dates entered yet.</p>
+      <button id="keydate-add" class="text-sm text-blue-600 hover:underline">+ Add date</button>
+      <div><button id="keydate-save" class="mt-4 px-4 py-2 bg-slate-900 text-white rounded font-medium">Save key dates</button></div>
+    </div>
   </section>
 </div>
-
-<dialog id="reset-data-dialog" class="rounded-lg p-0 w-full max-w-md backdrop:bg-slate-900/40">
-  <div class="p-5 bg-white rounded-lg border border-slate-200">
-    <h2 class="text-lg font-semibold text-slate-900">Reset all saved data?</h2>
-    <p class="text-sm text-slate-600 mt-2">This will permanently remove all saved course profiles, prediction inputs, and DvC settings from this browser.</p>
-    <p class="text-sm text-red-700 mt-2 font-medium">This action cannot be undone.</p>
-    <div class="mt-5 flex justify-end gap-2">
-      <button id="reset-data-cancel" class="px-3 py-2 border border-slate-300 rounded text-sm">Cancel</button>
-      <button id="reset-data-confirm" class="px-3 py-2 bg-red-600 text-white rounded text-sm">Yes, reset data</button>
-    </div>
-  </div>
-</dialog>
 
 <script>
 /* ===================== STATE / STORAGE ===================== */
@@ -227,52 +277,403 @@
 const {
   SCHOOLS, INTAKE_MONTHS, DEFAULT_CURVE, DEFAULT_SETTINGS,
   newProfile, migrateProfile,
+  isDefaultCurve, weeksUntil, cvFromHistory,
   normalCDF, normalPDF, curveLookup,
   forecast, recommend,
+  encodeRequest, decodeRequest,
 } = RecruitmentForecast;
 
-const STORAGE_KEY = 'recruitment-decider-state-v1';
+const PREFS_KEY = 'recruitment-decider-prefs-v1';
+// Where courses, settings and done marks were kept before sign-in was added. Read only to offer moving them across.
+const LEGACY_STATE_KEY = 'recruitment-decider-state-v1';
+const LEGACY_PROCESSED_KEY = 'recruitment-decider-processed-v1';
+const REQUEST_PARAM = 'req';
 
-function defaultState() {
+const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyB8RUWwassFKOxBRXtpDFT5oxE0x7gNpLI',
+  authDomain: 'uop-recruitment-decider.firebaseapp.com',
+  projectId: 'uop-recruitment-decider',
+  appId: '1:908326156017:web:a7b396138f262d37735b50',
+};
+
+// Who the suspension workflow runs between. The AHS raises a request; the ADS decides.
+// Keep these in step with firestore.rules, which is what actually enforces access.
+const ADS_EMAIL = 'kirsten.farrell@port.ac.uk';
+const AHS_EMAILS = [
+  'tracy.wallis@port.ac.uk',
+  'roger.moore@port.ac.uk',
+  'simon.archer@port.ac.uk',
+  'fiona.myers@port.ac.uk',
+];
+const ADMIN_EMAIL = 'matt.dennis@port.ac.uk';
+const START_DATE_INTAKES = INTAKE_MONTHS.filter(m => m !== 'Other');
+
+function readJson(key) {
+  try { return JSON.parse(localStorage.getItem(key)); } catch (e) { return null; }
+}
+
+// Courses, settings and key dates are shared and come from Firestore once signed in.
+// Only the figures last typed in and the course last chosen are kept in this browser.
+function loadState() {
+  const prefs = readJson(PREFS_KEY) || readJson(LEGACY_STATE_KEY) || {};
   return {
-    profiles: [newProfile('Example course')],
+    profiles: [],
     settings: { ...DEFAULT_SETTINGS },
-    currentInputs: {},
-    currentProfileId: null,
+    keyDates: [],  // [{ date: 'YYYY-MM-DD', intake: 'Any' | intake month, label }]
+    currentInputs: prefs.currentInputs || {},
+    currentProfileId: prefs.currentProfileId || null,
   };
 }
 
-function loadState() {
+// A request opened from a link is never written to storage, so it cannot overwrite the
+// figures the reader last typed in for themselves.
+function saveState() {
+  if (request || requestId) return;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      parsed.settings = { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) };
-      parsed.profiles = (parsed.profiles || []).map(migrateProfile);
-      parsed.currentInputs = parsed.currentInputs || {};
-      return parsed;
-    }
-  } catch (e) { console.warn('Bad saved state', e); }
-  return defaultState();
-}
-
-function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
-
-function resetSavedState() {
-  localStorage.removeItem(STORAGE_KEY);
-  state = defaultState();
-  if (!state.currentProfileId && state.profiles.length) state.currentProfileId = state.profiles[0].id;
-  if (chart) { chart.destroy(); chart = null; }
-  switchTab('predict');
-  flash('Saved data reset');
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ currentInputs: state.currentInputs, currentProfileId: state.currentProfileId }));
+  } catch (e) { console.warn('Could not save to this browser', e); }
 }
 
 let state = loadState();
-if (!state.currentProfileId && state.profiles.length) state.currentProfileId = state.profiles[0].id;
 let chart = null;
+let currentTab = 'predict';
+
+/* ===================== SIGN-IN AND SHARED STORAGE ===================== */
+firebase.initializeApp(FIREBASE_CONFIG);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+let user = null;             // { email } of the signed-in, permitted account
+let settingsStored = false;  // whether shared settings have ever been saved
+let keyDatesStored = false;  // whether shared key dates have ever been saved
+let requestOutcome = null;   // outcome recorded against the open request, if any
+let unsubscribe = [];
+// Unsaved edits on screen, which an update arriving from someone else must not overwrite.
+const dirty = { profiles: false, settings: false };
+
+function isDecider() { return !!user && [ADS_EMAIL, ADMIN_EMAIL].includes(user.email); }
+function stamp() { return { updatedBy: user.email, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }; }
+
+function profileDoc(p) {
+  const doc = JSON.parse(JSON.stringify(p));
+  delete doc.id;
+  delete doc.updatedAt;
+  return { ...doc, ...stamp() };
+}
+
+function writeFailed(e) {
+  console.warn(e);
+  flash(e && e.code === 'permission-denied'
+    ? 'Your account is not allowed to change this'
+    : 'Could not save. Check your connection and try again');
+}
+
+function showAuthScreen(message, { signIn = false, signOut = false, error = '' } = {}) {
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('auth-screen').classList.remove('hidden');
+  document.getElementById('auth-message').textContent = message;
+  const err = document.getElementById('auth-error');
+  err.textContent = error;
+  err.classList.toggle('hidden', !error);
+  document.getElementById('auth-signin').classList.toggle('hidden', !signIn);
+  document.getElementById('auth-signout').classList.toggle('hidden', !signOut);
+}
+
+function signIn() {
+  const provider = new firebase.auth.GoogleAuthProvider();
+  provider.setCustomParameters({ hd: 'port.ac.uk', prompt: 'select_account' });
+  auth.signInWithPopup(provider).catch(e => {
+    if (e.code === 'auth/popup-closed-by-user' || e.code === 'auth/cancelled-popup-request') return;
+    const error = e.code === 'auth/popup-blocked'
+      ? 'Your browser blocked the sign-in window. Allow pop-ups for this site and try again.'
+      : `Sign-in did not complete (${e.code || 'unknown error'}). Try again.`;
+    showAuthScreen('Sign in with your University of Portsmouth Google account to continue.', { signIn: true, error });
+  });
+}
+
+function onAuthChanged(u) {
+  unsubscribe.forEach(stop => stop());
+  unsubscribe = [];
+  user = null;
+  if (!u) {
+    showAuthScreen('Sign in with your University of Portsmouth Google account to continue.', { signIn: true });
+    return;
+  }
+  const email = (u.email || '').toLowerCase();
+  if (![ADS_EMAIL, ADMIN_EMAIL, ...AHS_EMAILS].includes(email)) {
+    showAuthScreen(`${email || 'This account'} does not have access to this tool.`, { signOut: true });
+    return;
+  }
+  user = { email };
+  document.getElementById('user-email').textContent = email;
+  document.getElementById('notify-from').textContent = email;
+  showAuthScreen('Loading…');
+  startSync();
+}
+
+// Listens to the shared data. The tool opens once everything has arrived; later changes,
+// including other people's, redraw whatever is on screen.
+function startSync() {
+  if (requestId && !request) {
+    fetchRequest().then(startSync);
+    return;
+  }
+  const pending = new Set(request ? ['request'] : ['profiles', 'settings', 'keyDates']);
+  const arrived = (name, redraw) => {
+    const first = pending.delete(name);
+    if (pending.size) return;
+    if (first) startApp(); else redraw();
+  };
+  const failed = e => {
+    console.warn(e);
+    showAuthScreen('', { signOut: true, error: e.code === 'permission-denied'
+      ? 'This account is not allowed to read the shared data.'
+      : 'The shared data could not be loaded. Check your connection and reload the page.' });
+  };
+
+  if (request) {
+    unsubscribe.push(db.collection('requests').doc(request.key).onSnapshot(snap => {
+      requestOutcome = snap.exists ? snap.data() : null;
+      arrived('request', renderDonePanel);
+    }, failed));
+    return;
+  }
+
+  unsubscribe.push(db.collection('profiles').onSnapshot(snap => {
+    state.profiles = snap.docs
+      .map(d => migrateProfile({ ...d.data(), id: d.id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (!state.profiles.find(p => p.id === state.currentProfileId)) state.currentProfileId = state.profiles[0]?.id || null;
+    arrived('profiles', refreshView);
+  }, failed));
+
+  unsubscribe.push(db.collection('shared').doc('settings').onSnapshot(snap => {
+    settingsStored = snap.exists;
+    const stored = snap.exists ? snap.data() : {};
+    state.settings = { ...DEFAULT_SETTINGS };
+    Object.keys(DEFAULT_SETTINGS).forEach(k => { if (Number.isFinite(stored[k])) state.settings[k] = stored[k]; });
+    arrived('settings', refreshView);
+  }, failed));
+
+  unsubscribe.push(db.collection('shared').doc('keyDates').onSnapshot(snap => {
+    keyDatesStored = snap.exists;
+    const items = snap.exists ? snap.data().items : [];
+    state.keyDates = (Array.isArray(items) ? items : [])
+      .filter(k => k && typeof k.date === 'string')
+      .map(k => ({ date: k.date, intake: k.intake || 'Any', label: k.label || '' }));
+    arrived('keyDates', refreshView);
+  }, failed));
+}
+
+function startApp() {
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  renderLegacyBanner();
+  switchTab(currentTab);
+}
+
+function refreshView() {
+  renderLegacyBanner();
+  if (currentTab === 'predict') renderPredict();
+  if (currentTab === 'profiles') renderProfiles(dirty.profiles);
+  if (currentTab === 'settings' && !dirty.settings) renderSettings();
+}
+
+/* ===================== DATA SAVED IN THIS BROWSER BEFORE SIGN-IN ===================== */
+function legacyData() {
+  if (request) return null;
+  const old = readJson(LEGACY_STATE_KEY);
+  if (!old) return null;
+  const known = new Set(state.profiles.map(p => p.id));
+  const profiles = (Array.isArray(old.profiles) ? old.profiles : []).map(migrateProfile)
+    .filter(p => !known.has(p.id) && !(p.name === 'Example course' && isDefaultCurve(p.curve)));
+  const changedSettings = old.settings && Object.keys(DEFAULT_SETTINGS).some(k => Number.isFinite(old.settings[k]) && old.settings[k] !== DEFAULT_SETTINGS[k]);
+  const settings = isDecider() && !settingsStored && changedSettings ? old.settings : null;
+  const keyDates = isDecider() && !keyDatesStored && Array.isArray(old.keyDates) && old.keyDates.length ? old.keyDates : null;
+  const processed = isDecider() ? (readJson(LEGACY_PROCESSED_KEY) || {}) : {};
+  if (!profiles.length && !settings && !keyDates) return null;
+  return { profiles, settings, keyDates, processed };
+}
+
+function clearLegacy() {
+  saveState();
+  localStorage.removeItem(LEGACY_STATE_KEY);
+  localStorage.removeItem(LEGACY_PROCESSED_KEY);
+  renderLegacyBanner();
+}
+
+function renderLegacyBanner() {
+  const banner = document.getElementById('legacy-banner');
+  const legacy = user ? legacyData() : null;
+  banner.classList.toggle('hidden', !legacy);
+  if (!legacy) return;
+  const parts = [];
+  if (legacy.profiles.length) parts.push(`${legacy.profiles.length} course${legacy.profiles.length === 1 ? '' : 's'} (${legacy.profiles.map(p => escapeHtml(p.name)).join(', ')})`);
+  if (legacy.settings) parts.push('suspension settings');
+  if (legacy.keyDates) parts.push(`${legacy.keyDates.length} key date${legacy.keyDates.length === 1 ? '' : 's'}`);
+  banner.innerHTML = `
+    <div class="font-semibold">This browser holds data saved before sign-in was added</div>
+    <p class="mt-1">${parts.join(', ')}. Nobody else can see it yet. Add it to the shared tool so everyone on the access list sees it, or discard it.</p>
+    <div class="mt-3 flex flex-wrap gap-2">
+      <button id="legacy-import" class="px-3 py-2 bg-slate-900 text-white rounded text-sm font-medium">Add to the shared tool</button>
+      <button id="legacy-discard" class="px-3 py-2 border border-amber-300 rounded text-sm hover:bg-amber-100">Discard</button>
+    </div>`;
+  document.getElementById('legacy-import').onclick = () => {
+    const batch = db.batch();
+    legacy.profiles.forEach(p => batch.set(db.collection('profiles').doc(p.id), profileDoc(p)));
+    if (legacy.settings) {
+      const settings = {};
+      Object.keys(DEFAULT_SETTINGS).forEach(k => { settings[k] = Number.isFinite(legacy.settings[k]) ? legacy.settings[k] : DEFAULT_SETTINGS[k]; });
+      batch.set(db.collection('shared').doc('settings'), { ...settings, ...stamp() });
+    }
+    if (legacy.keyDates) {
+      const items = legacy.keyDates.filter(k => k && k.date).map(k => ({ date: String(k.date), intake: k.intake || 'Any', label: String(k.label || '') }));
+      batch.set(db.collection('shared').doc('keyDates'), { items, ...stamp() });
+    }
+    Object.entries(legacy.processed).forEach(([key, done]) => {
+      if (!/^[a-z0-9]+$/.test(key) || !done) return;
+      batch.set(db.collection('requests').doc(key), {
+        decision: String(done.decision || ''), date: String(done.date || ''), course: String(done.course || ''), by: user.email,
+      });
+    });
+    batch.commit().then(() => { clearLegacy(); flash('Added to the shared tool'); }, writeFailed);
+  };
+  document.getElementById('legacy-discard').onclick = () => {
+    if (!confirm('Discard the data saved in this browser before sign-in was added? This cannot be undone.')) return;
+    clearLegacy();
+  };
+}
+
+/* ===================== SUSPENSION REQUEST (opened from an AHS link) ===================== */
+// The link carries only the id of a stored request, so the figures cannot be read without signing in.
+// Set once the request has loaded: { profile, inputs, settings, from, note, date, key }.
+let request = null;
+let requestId = null;  // id from the link, until the request has loaded or failed to load
+
+function activeProfile() { return request ? request.profile : state.profiles.find(p => p.id === state.currentProfileId); }
+function activeSettings() { return request ? request.settings : state.settings; }
+
+function readInputs() {
+  return {
+    weeksToStart: +document.getElementById('in-weeks').value,
+    currentApps: +document.getElementById('in-apps').value,
+    currentOffers: +document.getElementById('in-offers').value,
+    currentFirms: +document.getElementById('in-firms').value,
+    icpTransfers: +document.getElementById('in-icp').value,
+    foundationTransfers: +document.getElementById('in-found').value,
+    intakeMonth: document.getElementById('in-intake').value,
+    academicYear: document.getElementById('in-year').value,
+  };
+}
+
+function hashString(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+function loadRequest() {
+  const param = new URLSearchParams(window.location.search).get(REQUEST_PARAM);
+  if (!param) return;
+  if (/^[A-Za-z0-9]{20}$/.test(param)) {
+    requestId = param;  // fetched after sign-in, by fetchRequest()
+    return;
+  }
+  // Links sent before requests were stored carry the figures themselves. They still open.
+  const decoded = decodeRequest(param);
+  if (!decoded) {
+    document.getElementById('link-error').classList.remove('hidden');
+    return;
+  }
+  request = { ...decoded, key: hashString(param) };
+  showRequest();
+}
+
+// Resolves once the stored request has loaded. If it cannot be, the full tool opens with an error shown.
+function fetchRequest() {
+  const id = requestId;
+  return db.collection('requestDetails').doc(id).get().then(snap => {
+    const data = snap.exists ? snap.data() : null;
+    const decoded = data && decodeRequest(data.payload);
+    if (!decoded) throw new Error('Request not found');
+    // The sender is the account that stored the request, which the access rules enforce.
+    request = { ...decoded, from: String(data.from || ''), key: id };
+    showRequest();
+  }).catch(e => {
+    console.warn(e);
+    document.getElementById('link-error').classList.remove('hidden');
+  }).then(() => { requestId = null; });
+}
+
+function showRequest() {
+  const p = request.profile;
+  const banner = document.getElementById('request-banner');
+  banner.innerHTML = `
+    <div class="font-semibold">Suspension request: ${escapeHtml(p.name)}${p.code ? ' (' + escapeHtml(p.code) + ')' : ''}</div>
+    <p class="mt-1">Sent by ${escapeHtml(request.from || 'an unnamed sender')}${request.date ? ' on ' + escapeHtml(request.date) : ''}. The course and figures below are as they were sent.</p>
+    ${request.note ? `<p class="mt-2"><span class="font-medium">Note from sender:</span> ${escapeHtml(request.note)}</p>` : ''}
+    <p class="mt-2 text-xs text-blue-800">You can adjust the figures to test the decision. Changes here are not saved; reopen the link to return to the figures as sent. <a class="underline" href="${escapeAttr(window.location.pathname)}">Open the full tool</a></p>
+  `;
+  banner.classList.remove('hidden');
+  document.getElementById('form-draft-card').classList.remove('hidden');
+  document.getElementById('main-nav').classList.add('hidden');
+  document.getElementById('predict-profile').parentElement.classList.add('hidden');
+}
+
+// The outcome is stored against the request, so the sender and the rest of the team see it
+// when they open the same link. Only the ADS and admin can record or undo it.
+function renderDonePanel() {
+  if (!request || !user) return;
+  const panel = document.getElementById('done-panel');
+  const done = requestOutcome;
+  const canDecide = isDecider();
+  const ref = db.collection('requests').doc(request.key);
+  if (done) {
+    panel.innerHTML = `
+      <div class="p-3 bg-emerald-50 border border-emerald-200 rounded text-sm text-emerald-900">
+        <span class="font-semibold">Done.</span> ${escapeHtml(done.decision)}, recorded ${escapeHtml(done.date)}${done.by ? ' by ' + escapeHtml(done.by) : ''}.
+      </div>
+      ${canDecide ? `<div class="mt-3 flex flex-wrap gap-2">
+        ${request.from ? '<button id="done-email" class="px-3 py-2 border border-slate-300 rounded text-sm hover:bg-slate-50">Email outcome to sender</button>' : ''}
+        <button id="done-undo" class="px-3 py-2 border border-slate-300 rounded text-sm hover:bg-slate-50">Undo</button>
+      </div>` : ''}`;
+    const undoBtn = document.getElementById('done-undo');
+    if (undoBtn) undoBtn.onclick = () => { ref.delete().catch(writeFailed); };
+    const emailBtn = document.getElementById('done-email');
+    if (emailBtn) emailBtn.onclick = () => {
+      const p = request.profile;
+      const subject = `Re: Recruitment suspension — ${p.name}${p.code ? ' (' + p.code + ')' : ''}`;
+      const body = `Outcome of your suspension request for ${p.name}${p.code ? ' (' + p.code + ')' : ''}:\n\n${done.decision} (${done.date}).\n`;
+      window.location.href = `mailto:${request.from}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    };
+  } else if (!canDecide) {
+    panel.innerHTML = '<p class="text-sm text-slate-500">No outcome has been recorded for this request yet. The ADS records it here once decided.</p>';
+  } else {
+    panel.innerHTML = `
+      <label class="field-label" for="done-decision">Outcome</label>
+      <div class="mt-1 flex flex-wrap items-center gap-2">
+        <select id="done-decision" class="num-input max-w-md">
+          <option>Suspension requested through the Microsoft Form</option>
+          <option>Decided not to request suspension</option>
+          <option>Deferred, to be reviewed again later</option>
+        </select>
+        <button id="done-mark" class="px-4 py-2 bg-slate-900 text-white rounded font-medium text-sm">Mark as done</button>
+      </div>
+      <p class="text-xs text-slate-500 mt-2">Recorded against this request. Anyone on the access list who opens the same link will see the outcome.</p>`;
+    document.getElementById('done-mark').onclick = () => {
+      ref.set({
+        decision: document.getElementById('done-decision').value,
+        date: new Date().toISOString().slice(0, 10),
+        course: request.profile.name,
+        by: user.email,
+      }).then(() => flash('Marked as done'), writeFailed);
+    };
+  }
+}
 
 /* ===================== TAB SWITCHING ===================== */
 function switchTab(name) {
+  currentTab = name;
   document.querySelectorAll('.tab-section').forEach(s => s.classList.add('hidden'));
   document.getElementById('tab-' + name).classList.remove('hidden');
   document.querySelectorAll('.tab-btn').forEach(b => {
@@ -295,13 +696,13 @@ function renderPredict() {
   const sel = document.getElementById('predict-profile');
   const main = document.getElementById('predict-main');
   const empty = document.getElementById('predict-noprofile');
-  if (!state.profiles.length) { main.classList.add('hidden'); empty.classList.remove('hidden'); return; }
+  if (!request && !state.profiles.length) { main.classList.add('hidden'); empty.classList.remove('hidden'); return; }
   main.classList.remove('hidden'); empty.classList.add('hidden');
 
   sel.innerHTML = state.profiles.map(p => `<option value="${p.id}" ${p.id === state.currentProfileId ? 'selected' : ''}>${escapeHtml(p.name)} (cap ${p.cap})</option>`).join('');
   sel.onchange = () => { state.currentProfileId = sel.value; saveState(); updatePredict(); };
 
-  const inputs = state.currentInputs;
+  const inputs = request ? request.inputs : state.currentInputs;
   document.getElementById('in-weeks').value = inputs.weeksToStart ?? 16;
   document.getElementById('in-apps').value = inputs.currentApps ?? 60;
   document.getElementById('in-offers').value = inputs.currentOffers ?? 40;
@@ -316,16 +717,8 @@ function renderPredict() {
     const el = document.getElementById(id);
     const evt = el.tagName === 'SELECT' ? 'change' : 'input';
     el[evt === 'change' ? 'onchange' : 'oninput'] = () => {
-      state.currentInputs = {
-        weeksToStart: +document.getElementById('in-weeks').value,
-        currentApps: +document.getElementById('in-apps').value,
-        currentOffers: +document.getElementById('in-offers').value,
-        currentFirms: +document.getElementById('in-firms').value,
-        icpTransfers: +document.getElementById('in-icp').value,
-        foundationTransfers: +document.getElementById('in-found').value,
-        intakeMonth: document.getElementById('in-intake').value,
-        academicYear: document.getElementById('in-year').value,
-      };
+      if (request) request.inputs = readInputs();
+      else state.currentInputs = readInputs();
       saveState();
       updatePredict();
     };
@@ -333,21 +726,59 @@ function renderPredict() {
   updatePredict();
 }
 
+function formatDate(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr || '');
+  if (!m) return dateStr || '';
+  return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// Fills "weeks until course start" from the start date in the course profile, where there is one.
+// A request opened from a link keeps the weeks as they were sent.
+function applyAutoWeeks(profile) {
+  const input = document.getElementById('in-weeks');
+  const hint = document.getElementById('weeks-hint');
+  if (request) { input.readOnly = false; hint.textContent = ''; return; }
+  const intake = document.getElementById('in-intake').value;
+  const date = profile.startDates && profile.startDates[intake];
+  const weeks = weeksUntil(date);
+  input.readOnly = weeks !== null;
+  input.classList.toggle('bg-slate-100', weeks !== null);
+  if (weeks !== null) {
+    input.value = weeks;
+    state.currentInputs.weeksToStart = weeks;
+    hint.textContent = `Worked out from the ${intake} start date in the course profile (${formatDate(date)}).`;
+  } else if (date) {
+    hint.textContent = `The ${intake} start date in the course profile (${formatDate(date)}) has passed. Update it there, or enter the weeks here.`;
+  } else {
+    hint.textContent = `Add a ${intake} start date to the course profile to have this filled in for you.`;
+  }
+}
+
+function renderKeyDateNote(intake) {
+  const note = document.getElementById('key-date-note');
+  const next = (state.keyDates || [])
+    .filter(k => (k.intake === 'Any' || k.intake === intake) && weeksUntil(k.date) !== null)
+    .sort((a, b) => a.date.localeCompare(b.date))[0];
+  note.classList.toggle('hidden', !next || !!request);
+  if (!next || request) return;
+  const days = Math.round((new Date(next.date + 'T00:00:00') - new Date(new Date().toDateString())) / 86400000);
+  const when = days === 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+  note.innerHTML = `<span class="font-medium">Next key date:</span> ${escapeHtml(formatDate(next.date))} (${when})${next.label ? ' — ' + escapeHtml(next.label) : ''}`;
+}
+
 function updatePredict() {
-  const profile = state.profiles.find(p => p.id === state.currentProfileId);
+  const profile = activeProfile();
   if (!profile) return;
-  const inputs = {
-    weeksToStart: +document.getElementById('in-weeks').value,
-    currentApps: +document.getElementById('in-apps').value,
-    currentOffers: +document.getElementById('in-offers').value,
-    currentFirms: +document.getElementById('in-firms').value,
-    icpTransfers: +document.getElementById('in-icp').value,
-    foundationTransfers: +document.getElementById('in-found').value,
-    intakeMonth: document.getElementById('in-intake').value,
-    academicYear: document.getElementById('in-year').value,
-  };
-  const f = forecast(profile, inputs, state.settings);
-  const r = recommend(f, inputs, state.settings);
+  const settings = activeSettings();
+  applyAutoWeeks(profile);
+  const inputs = readInputs();
+  renderKeyDateNote(inputs.intakeMonth);
+  const f = forecast(profile, inputs, settings);
+  const r = recommend(f, inputs, settings);
+
+  // Only the AHS raises requests, and only when the forecast says one may be worth making.
+  const canNotify = !request && (r.zone === 'submit' || r.zone === 'marginal');
+  document.getElementById('notify-panel').classList.toggle('hidden', !canNotify);
 
   // Recommendation card colours
   const colourMap = {
@@ -365,7 +796,7 @@ function updatePredict() {
 
   document.getElementById('rec-meta').innerHTML = `
     <div><div class="field-label">P(meet cap)</div><div class="text-lg font-semibold">${(f.pMeetCap*100).toFixed(0)}%</div></div>
-    <div><div class="field-label">P(exceed cap × ${(1+state.settings.safetyBuffer).toFixed(2)})</div><div class="text-lg font-semibold">${(f.pOvershoot*100).toFixed(0)}%</div></div>
+    <div><div class="field-label">P(exceed cap × ${(1+settings.safetyBuffer).toFixed(2)})</div><div class="text-lg font-semibold">${(f.pOvershoot*100).toFixed(0)}%</div></div>
     <div><div class="field-label">Cycle confidence</div><div class="text-lg font-semibold">${(f.cycleConfidence*100).toFixed(0)}%</div></div>
     <div><div class="field-label">Discounted P(overshoot)</div><div class="text-lg font-semibold">${(f.gatedPOvershoot*100).toFixed(0)}%</div></div>
   `;
@@ -378,24 +809,58 @@ function updatePredict() {
 
   // Breakdown
   const b = f.components;
+  const pct = v => `${+(v*100).toFixed(1)}%`;
+  const a2o = `${pct(profile.appToOffer)} application → offer`;
+  const o2f = `${pct(profile.offerToFirm)} offer → firm`;
+  const f2e = `${pct(profile.firmToEnrolled)} firm → enrolled`;
+  const apps = Math.max(0, inputs.currentApps || 0);
+  const offers = Math.max(0, inputs.currentOffers || 0);
+  const firms = Math.max(0, inputs.currentFirms || 0);
+  const row = (label, value, explainer) => `
+    <div class="border-b border-slate-100 py-2">
+      <div class="flex justify-between gap-4"><span class="text-slate-700">${label}</span><span class="font-medium">${value}</span></div>
+      <p class="text-xs text-slate-500 mt-0.5">${explainer}</p>
+    </div>`;
   const postWithdrawalNote = profile.expectedPostEnrolWithdrawal > 0
-    ? `<div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">Less typical post-enrol withdrawals (${Math.round(profile.expectedPostEnrolWithdrawal*100)}%)</span><span class="font-medium">−${(f.meanNewIntakePreWithdrawal - f.meanNewIntake).toFixed(1)}</span></div>`
+    ? row(`Less typical post-enrol withdrawals (${Math.round(profile.expectedPostEnrolWithdrawal*100)}%)`,
+        `−${(f.meanNewIntakePreWithdrawal - f.meanNewIntake).toFixed(1)}`,
+        `${pct(profile.expectedPostEnrolWithdrawal)} of the ${f.meanNewIntakePreWithdrawal.toFixed(1)} subtotal above. Students who enrol but leave before first census, using the typical Sept–Dec withdrawal rate in the course profile.`)
+    : '';
+  const wd = profile.expectedPostEnrolWithdrawal;
+  const curveWarning = isDefaultCurve(profile.curve)
+    ? ` <span class="text-amber-700 font-medium">This course is still using the tool's placeholder curve, not its own application history, so this figure and everything that depends on it is a rough guide only.</span>`
     : '';
   document.getElementById('breakdown').innerHTML = `
-    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">Application curve completion</span><span class="font-medium">${(f.phi*100).toFixed(0)}%</span></div>
-    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">Projected final applications</span><span class="font-medium">${f.projectedFinalApps.toFixed(0)}</span></div>
-    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">From confirmed firms</span><span class="font-medium">${b.fromFirms.toFixed(1)}</span></div>
-    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">From offers awaiting firm (${b.offersWaiting})</span><span class="font-medium">${b.fromOffersWaiting.toFixed(1)}</span></div>
-    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">From apps awaiting offer (${b.appsWaiting})</span><span class="font-medium">${b.fromAppsWaiting.toFixed(1)}</span></div>
-    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">From future apps (${b.futureApps.toFixed(0)})</span><span class="font-medium">${b.fromFutureApps.toFixed(1)}</span></div>
-    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">ICP transfers</span><span class="font-medium">${b.fromICP.toFixed(1)}</span></div>
-    <div class="flex justify-between border-b border-slate-100 py-1"><span class="text-slate-600">Foundation transfers</span><span class="font-medium">${b.fromFoundation.toFixed(1)}</span></div>
+    ${row('Application curve completion', `${(f.phi*100).toFixed(0)}%`,
+      `The share of the year's final application total that has normally arrived by ${inputs.weeksToStart || 0} weeks before start. Read from the application curve in the course profile.${curveWarning}`)}
+    ${row('Projected final applications', f.projectedFinalApps.toFixed(0),
+      `${apps} applications received ÷ ${(f.phi*100).toFixed(0)}% curve completion. Where applications are expected to end up if this year follows the usual curve.`)}
+    ${row('From confirmed firms', b.fromFirms.toFixed(1),
+      `${firms} firms × ${f2e}. Applicants who have accepted their offer, less those who typically never enrol.`)}
+    ${row(`From offers awaiting firm (${b.offersWaiting})`, b.fromOffersWaiting.toFixed(1),
+      `${offers} offers − ${firms} firms = ${b.offersWaiting} offers not yet accepted, × ${o2f} × ${f2e}.`)}
+    ${row(`From apps awaiting offer (${b.appsWaiting})`, b.fromAppsWaiting.toFixed(1),
+      `${apps} applications − ${offers} offers = ${b.appsWaiting} applications without an offer yet, × ${a2o} × ${o2f} × ${f2e}.`)}
+    ${row(`From future apps (${b.futureApps.toFixed(0)})`, b.fromFutureApps.toFixed(1),
+      `${f.projectedFinalApps.toFixed(0)} projected − ${apps} received = ${b.futureApps.toFixed(0)} applications still expected, × ${a2o} × ${o2f} × ${f2e}. The least certain line: none of these applications exist yet.`)}
+    ${row('ICP transfers', b.fromICP.toFixed(1),
+      `The number you entered above, counted in full with no conversion rate applied.`)}
+    ${row('Foundation transfers', b.fromFoundation.toFixed(1),
+      `The number you entered above, counted in full with no conversion rate applied.`)}
     ${postWithdrawalNote}
-    <div class="flex justify-between py-1 font-semibold"><span>Expected new intake at first census</span><span>${f.meanNewIntake.toFixed(1)}</span></div>
+    <div class="py-2">
+      <div class="flex justify-between gap-4 font-semibold"><span>Expected new intake at first census</span><span>${f.meanNewIntake.toFixed(1)}</span></div>
+      <p class="text-xs text-slate-500 mt-0.5">The "From…" and transfer lines added together, less withdrawals. This is the centre of the forecast curve above.</p>
+    </div>
+    ${row('Compared against', f.targetWithBuffer.toFixed(1),
+      `Cap ${f.effectiveCap} × ${(1 + settings.safetyBuffer).toFixed(2)} (the ${pct(settings.safetyBuffer)} safety buffer from Suspension settings). Because withdrawals are already taken off the forecast, about ${(f.effectiveCap / (1 - Math.min(wd, 0.99))).toFixed(0)} students could enrol at the start and still land on the cap of ${f.effectiveCap} at first census; with the buffer that rises to about ${(f.targetWithBuffer / (1 - Math.min(wd, 0.99))).toFixed(0)}.`)}
+    ${row('Spread of the forecast (±)', f.sd.toFixed(1),
+      `How far either side of ${f.meanNewIntake.toFixed(1)} the final figure could reasonably land. Based on the course's year-to-year variability (${pct(profile.baseCV)} in the course profile), widened when little of the application curve has played out.`)}
   `;
 
   drawChart(f, profile);
   renderFormDraft(profile, inputs, f, r);
+  renderDonePanel();
 }
 
 function renderFormDraft(profile, inputs, f, r) {
@@ -423,7 +888,7 @@ function renderFormDraft(profile, inputs, f, r) {
   const lines = [];
   lines.push(`${profile.name}${profile.code ? ' (' + profile.code + ')' : ''} has a cap of ${profile.cap}.`);
   lines.push(`Current position: ${inputs.currentFirms} firm${inputs.currentFirms === 1 ? '' : 's'}, ${inputs.currentOffers} offers issued, ${inputs.currentApps} applications received with ${inputs.weeksToStart} week${inputs.weeksToStart === 1 ? '' : 's'} until ${intake} ${year} start.${inputs.icpTransfers ? ` ${inputs.icpTransfers} ICP transfer${inputs.icpTransfers === 1 ? '' : 's'} expected on top of this.` : ''}${inputs.foundationTransfers ? ` ${inputs.foundationTransfers} Foundation transfer${inputs.foundationTransfers === 1 ? '' : 's'} also expected.` : ''}`);
-  lines.push(`Forecast new intake at first census: ${f.meanNewIntake.toFixed(0)} (±${f.sd.toFixed(0)}), giving a ${Math.round(f.pOvershoot*100)}% probability of exceeding cap by ${Math.round(state.settings.safetyBuffer*100)}% or more.`);
+  lines.push(`Forecast new intake at first census: ${f.meanNewIntake.toFixed(0)} (±${f.sd.toFixed(0)}), giving a ${Math.round(f.pOvershoot*100)}% probability of exceeding cap by ${Math.round(activeSettings().safetyBuffer*100)}% or more.`);
   if (profile.placementCourse && profile.repeatsImpactPlacement > 0) {
     lines.push(`Placement capacity is further constrained by ${profile.repeatsImpactPlacement} repeating students occupying placement slots, reducing effective cap to ${f.effectiveCap}.`);
   }
@@ -449,11 +914,11 @@ document.addEventListener('click', (e) => {
 
 function drawChart(f, profile) {
   const ctx = document.getElementById('distChart');
-  const min = Math.max(0, f.meanEnrolment - 4 * f.sd);
-  const max = f.meanEnrolment + 4 * f.sd;
+  const min = Math.max(0, f.meanNewIntake - 4 * f.sd);
+  const max = f.meanNewIntake + 4 * f.sd;
   const step = Math.max(1, Math.round((max - min) / 80));
   const xs = [], ys = [];
-  for (let x = min; x <= max; x += step) { xs.push(Math.round(x)); ys.push(normalPDF(x, f.meanEnrolment, f.sd)); }
+  for (let x = min; x <= max; x += step) { xs.push(Math.round(x)); ys.push(normalPDF(x, f.meanNewIntake, f.sd)); }
 
   const data = {
     labels: xs,
@@ -504,8 +969,8 @@ function drawChart(f, profile) {
           ctx.restore();
         }
         vline(capX, 'rgb(220, 38, 38)', `Cap (${profile.cap})`);
-        vline(bufX, 'rgb(217, 119, 6)', `Cap +${Math.round(state.settings.safetyBuffer*100)}% (${Math.round(bufX)})`);
-        vline(f.meanEnrolment, 'rgb(5, 150, 105)', `Mean (${Math.round(f.meanEnrolment)})`);
+        vline(bufX, 'rgb(217, 119, 6)', `Cap +${Math.round(activeSettings().safetyBuffer*100)}% (${Math.round(bufX)})`);
+        vline(f.meanNewIntake, 'rgb(5, 150, 105)', `Mean (${Math.round(f.meanNewIntake)})`);
       }
     }]
   };
@@ -515,21 +980,24 @@ function drawChart(f, profile) {
 }
 
 /* ===================== PROFILES TAB ===================== */
-function renderProfiles() {
+// keepEditor leaves the editor alone, so unsaved edits survive an update from someone else.
+function renderProfiles(keepEditor) {
   const list = document.getElementById('profile-list');
   if (!state.profiles.length) {
     list.innerHTML = '<li class="text-sm text-slate-500">No courses yet.</li>';
   } else {
     list.innerHTML = state.profiles.map(p =>
-      `<li><button data-id="${p.id}" class="profile-row w-full text-left px-3 py-2 rounded ${p.id === state.currentProfileId ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}">${escapeHtml(p.name)}<div class="text-xs ${p.id === state.currentProfileId ? 'text-slate-300' : 'text-slate-500'}">cap ${p.cap} · repeats ${p.repeats}</div></button></li>`
+      `<li><button data-id="${p.id}" class="profile-row w-full text-left px-3 py-2 rounded ${p.id === state.currentProfileId ? 'bg-slate-900 text-white' : 'hover:bg-slate-100'}">${escapeHtml(p.name)}<div class="text-xs ${p.id === state.currentProfileId ? 'text-slate-300' : 'text-slate-500'}">cap ${p.cap} · repeats ${p.expectedRepeats}</div></button></li>`
     ).join('');
     list.querySelectorAll('.profile-row').forEach(btn => btn.onclick = () => { state.currentProfileId = btn.dataset.id; saveState(); renderProfiles(); });
   }
-  renderProfileEditor();
+  if (!keepEditor) renderProfileEditor();
 }
 
 function renderProfileEditor() {
   const editor = document.getElementById('profile-editor');
+  dirty.profiles = false;
+  editor.oninput = () => { dirty.profiles = true; };
   const p = state.profiles.find(x => x.id === state.currentProfileId);
   if (!p) { editor.innerHTML = '<p class="text-slate-500">Select or create a course.</p>'; return; }
 
@@ -554,7 +1022,23 @@ function renderProfileEditor() {
       <div><label class="field-label">Repeats occupying placement slots</label><input id="ed-rip" type="number" min="0" step="1" class="num-input mt-1" value="${p.repeatsImpactPlacement}"></div>
       <div><label class="field-label">Average repeating students (info)</label><input id="ed-repeats" type="number" min="0" step="1" class="num-input mt-1" value="${p.expectedRepeats}"></div>
       <div><label class="field-label">Typical Sept–Dec withdrawal rate</label><input id="ed-postwd" type="number" min="0" max="1" step="0.01" class="num-input mt-1" value="${p.expectedPostEnrolWithdrawal}"></div>
-      <div><label class="field-label">Base coefficient of variation</label><input id="ed-cv" type="number" min="0" max="1" step="0.01" class="num-input mt-1" value="${p.baseCV}"></div>
+    </div>
+
+    <h3 class="font-semibold mt-2 mb-1">Course start dates</h3>
+    <p class="text-xs text-slate-500 mb-2">Used to fill in "weeks until course start" on the Predict screen. Leave blank for intakes this course does not have. Update these each year.</p>
+    <div class="grid grid-cols-2 gap-4 mb-5">
+      ${START_DATE_INTAKES.map(m => `<div><label class="field-label">${m} start</label><input type="date" data-intake="${m}" class="ed-start num-input mt-1 w-full" value="${escapeAttr((p.startDates || {})[m] || '')}"></div>`).join('')}
+    </div>
+
+    <h3 class="font-semibold mt-2 mb-1">Year-to-year variability</h3>
+    <p class="text-xs text-slate-500 mb-2">How much this course's final new intake normally moves from one year to the next, as a fraction of its average (the coefficient of variation). It sets how wide the forecast is: 0.08 means the final figure typically lands within about 8% either side of the forecast. A higher value makes the tool less certain, so it needs stronger figures before it recommends a request.</p>
+    <div class="grid grid-cols-2 gap-4 mb-5">
+      <div><label class="field-label">Variability (0–1)</label><input id="ed-cv" type="number" min="0" max="1" step="0.01" class="num-input mt-1" value="${p.baseCV}"></div>
+      <div>
+        <label class="field-label">Work it out from past intakes</label>
+        <input id="ed-cv-history" type="text" class="num-input mt-1" placeholder="e.g. 28, 31, 30, 33, 27">
+        <p id="ed-cv-result" class="text-xs text-slate-500 mt-1">Enter the final new intake for the last 3 to 5 years, separated by commas.</p>
+      </div>
     </div>
 
     <h3 class="font-semibold mt-2 mb-2">Conversion ladder</h3>
@@ -566,6 +1050,7 @@ function renderProfileEditor() {
 
     <h3 class="font-semibold mt-2 mb-1">Application curve</h3>
     <p class="text-xs text-slate-500 mb-2">Cumulative % of final-year applications expected by N weeks before course start. Edit rows to match your course's history.</p>
+    ${isDefaultCurve(p.curve) ? `<div class="p-3 mb-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-900"><span class="font-semibold">This is a placeholder curve, not this course's data.</span> Every new course starts with the same illustrative figures. To replace it, take the last 2 to 3 years from PowerBI: for each row, divide the applications received by that many weeks before start by that year's final total, then average across the years.</div>` : ''}
     <table class="curve-table w-full text-sm mb-2">
       <thead><tr class="text-left text-slate-500"><th class="font-medium pr-2">Weeks before start</th><th class="font-medium pr-2">Cumulative % of apps (0–1)</th><th></th></tr></thead>
       <tbody id="curve-rows"></tbody>
@@ -580,13 +1065,23 @@ function renderProfileEditor() {
 
   renderCurveRows(p);
 
+  document.getElementById('ed-cv-history').oninput = (e) => {
+    const values = e.target.value.split(/[\s,;]+/).filter(Boolean).map(Number);
+    const cv = cvFromHistory(values);
+    const out = document.getElementById('ed-cv-result');
+    if (cv === null) { out.textContent = 'Enter at least two years of final new intake, separated by commas.'; return; }
+    const rounded = Math.min(1, Math.round(cv * 100) / 100);
+    document.getElementById('ed-cv').value = rounded;
+    out.textContent = `Variability ${rounded.toFixed(2)}: the spread of those ${values.filter(v => v > 0).length} years (standard deviation) divided by their average. Filled in on the left; save to keep it.`;
+  };
+
   document.getElementById('ed-delete').onclick = () => {
-    if (!confirm(`Delete "${p.name}"?`)) return;
-    state.profiles = state.profiles.filter(x => x.id !== p.id);
-    state.currentProfileId = state.profiles[0]?.id || null;
-    saveState(); renderProfiles();
+    if (!confirm(`Delete "${p.name}"? It will be removed for everyone who uses the tool.`)) return;
+    dirty.profiles = false;
+    db.collection('profiles').doc(p.id).delete().then(() => flash('Course deleted'), writeFailed);
   };
   document.getElementById('curve-add').onclick = () => {
+    dirty.profiles = true;
     p.curve.push({ w: 0, p: 1.0 });
     renderCurveRows(p);
   };
@@ -603,6 +1098,8 @@ function renderProfileEditor() {
     p.appToOffer = clamp(+document.getElementById('ed-a2o').value, 0, 1);
     p.offerToFirm = clamp(+document.getElementById('ed-o2f').value, 0, 1);
     p.firmToEnrolled = clamp(+document.getElementById('ed-f2e').value, 0, 1);
+    p.startDates = {};
+    document.querySelectorAll('.ed-start').forEach(el => { if (el.value) p.startDates[el.dataset.intake] = el.value; });
     // Read curve values
     const rows = document.querySelectorAll('#curve-rows tr');
     p.curve = [];
@@ -612,9 +1109,8 @@ function renderProfileEditor() {
       if (!isNaN(w) && !isNaN(v)) p.curve.push({ w, p: clamp(v, 0, 1) });
     });
     p.curve.sort((a, b) => b.w - a.w);
-    saveState();
-    renderProfiles();
-    flash('Saved');
+    dirty.profiles = false;
+    db.collection('profiles').doc(p.id).set(profileDoc(p)).then(() => flash('Saved'), writeFailed);
   };
   document.getElementById('ed-revert').onclick = () => renderProfileEditor();
 }
@@ -628,44 +1124,74 @@ function renderCurveRows(p) {
       <td class="py-1"><button class="text-xs text-red-600 crv-del">remove</button></td>
     </tr>
   `).join('');
-  tbody.querySelectorAll('.crv-del').forEach((b, i) => b.onclick = () => { p.curve.splice(i, 1); renderCurveRows(p); });
+  tbody.querySelectorAll('.crv-del').forEach((b, i) => b.onclick = () => { dirty.profiles = true; p.curve.splice(i, 1); renderCurveRows(p); });
 }
 
 document.getElementById('new-profile').onclick = () => {
   const p = newProfile('New course ' + (state.profiles.length + 1));
-  state.profiles.push(p);
   state.currentProfileId = p.id;
   saveState();
-  renderProfiles();
+  dirty.profiles = false;
+  db.collection('profiles').doc(p.id).set(profileDoc(p)).catch(writeFailed);
 };
-
-/* ===================== RESET DATA DIALOG ===================== */
-const resetDialog = document.getElementById('reset-data-dialog');
-document.getElementById('reset-data-btn').onclick = () => {
-  if (typeof resetDialog.showModal === 'function') resetDialog.showModal();
-};
-document.getElementById('reset-data-cancel').onclick = () => resetDialog.close();
-document.getElementById('reset-data-confirm').onclick = () => {
-  resetDialog.close();
-  resetSavedState();
-};
-resetDialog.addEventListener('click', (e) => {
-  const rect = resetDialog.getBoundingClientRect();
-  const inBounds = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
-  if (!inBounds) resetDialog.close();
-});
 
 /* ===================== SETTINGS TAB ===================== */
+// Shared by everyone; only the ADS and admin can change them.
+function lockSettings() {
+  const canEdit = isDecider();
+  document.getElementById('settings-readonly').classList.toggle('hidden', canEdit);
+  document.querySelectorAll('#tab-settings input, #tab-settings select').forEach(el => { el.disabled = !canEdit; });
+  document.querySelectorAll('#tab-settings button').forEach(el => el.classList.toggle('hidden', !canEdit));
+}
+document.getElementById('tab-settings').addEventListener('input', () => { dirty.settings = true; });
+
 function renderSettings() {
+  dirty.settings = false;
   document.getElementById('s-buffer').value = state.settings.safetyBuffer;
   document.getElementById('s-submit').value = state.settings.submitThreshold;
   document.getElementById('s-marginal').value = state.settings.marginalThreshold;
   document.getElementById('s-minweeks').value = state.settings.minWeeksWindow;
   document.getElementById('s-amp').value = state.settings.uncertaintyAmplifier;
   document.getElementById('s-phi').value = state.settings.fullConfidencePhi;
+  renderKeyDateRows(state.keyDates.map(k => ({ ...k })));
 }
+
+function renderKeyDateRows(rows) {
+  const tbody = document.getElementById('keydate-rows');
+  document.getElementById('keydate-empty').classList.toggle('hidden', rows.length > 0);
+  tbody.innerHTML = rows.map(k => `
+    <tr>
+      <td class="pr-2 py-1"><input class="kd-date" type="date" value="${escapeAttr(k.date || '')}"></td>
+      <td class="pr-2 py-1"><select class="kd-intake num-input">${['Any', ...START_DATE_INTAKES].map(m => `<option ${m === (k.intake || 'Any') ? 'selected' : ''}>${m}</option>`).join('')}</select></td>
+      <td class="pr-2 py-1"><input class="kd-label" type="text" maxlength="120" value="${escapeAttr(k.label || '')}" placeholder="e.g. Last date to request suspension"></td>
+      <td class="py-1"><button class="text-xs text-red-600 kd-del">remove</button></td>
+    </tr>`).join('');
+  tbody.querySelectorAll('.kd-del').forEach((b, i) => b.onclick = () => {
+    const current = readKeyDateRows(); current.splice(i, 1); renderKeyDateRows(current);
+    dirty.settings = true;
+  });
+  lockSettings();
+}
+
+function readKeyDateRows() {
+  return [...document.querySelectorAll('#keydate-rows tr')].map(tr => ({
+    date: tr.querySelector('.kd-date').value,
+    intake: tr.querySelector('.kd-intake').value,
+    label: tr.querySelector('.kd-label').value.trim(),
+  }));
+}
+
+document.getElementById('keydate-add').onclick = () => {
+  renderKeyDateRows([...readKeyDateRows(), { date: '', intake: 'Any', label: '' }]);
+  dirty.settings = true;
+};
+// Settings and key dates are saved separately, so each save keeps the other's unsaved edits on screen.
+document.getElementById('keydate-save').onclick = () => {
+  const items = readKeyDateRows().filter(k => k.date).sort((a, b) => a.date.localeCompare(b.date));
+  db.collection('shared').doc('keyDates').set({ items, ...stamp() }).then(() => flash('Key dates saved'), writeFailed);
+};
 document.getElementById('save-settings').onclick = () => {
-  state.settings = {
+  const settings = {
     safetyBuffer: clamp(+document.getElementById('s-buffer').value, 0, 0.5),
     submitThreshold: clamp(+document.getElementById('s-submit').value, 0, 1),
     marginalThreshold: clamp(+document.getElementById('s-marginal').value, 0, 1),
@@ -673,14 +1199,90 @@ document.getElementById('save-settings').onclick = () => {
     uncertaintyAmplifier: clamp(+document.getElementById('s-amp').value, 0, 5),
     fullConfidencePhi: clamp(+document.getElementById('s-phi').value, 0.05, 1),
   };
-  saveState();
-  flash('Settings saved');
+  db.collection('shared').doc('settings').set({ ...settings, ...stamp() }).then(() => flash('Settings saved'), writeFailed);
 };
 document.getElementById('reset-settings').onclick = () => {
-  state.settings = { ...DEFAULT_SETTINGS };
-  saveState();
-  renderSettings();
-  flash('Reset');
+  if (!confirm('Reset the suspension settings to their defaults for everyone?')) return;
+  db.collection('shared').doc('settings').set({ ...DEFAULT_SETTINGS, ...stamp() }).then(() => {
+    Object.entries({ 's-buffer': 'safetyBuffer', 's-submit': 'submitThreshold', 's-marginal': 'marginalThreshold',
+      's-minweeks': 'minWeeksWindow', 's-amp': 'uncertaintyAmplifier', 's-phi': 'fullConfidencePhi' })
+      .forEach(([id, key]) => { document.getElementById(id).value = DEFAULT_SETTINGS[key]; });
+    flash('Reset');
+  }, writeFailed);
+};
+
+/* ===================== NOTIFY ADS (AHS raising a request) ===================== */
+function initNotify() {
+  const admin = document.getElementById('admin-contact');
+  admin.textContent = ADMIN_EMAIL;
+  admin.href = 'mailto:' + ADMIN_EMAIL;
+}
+
+// The request last stored from this screen, so the three buttons share one request while
+// the course, figures and note are unchanged: { payload, id }.
+let storedRequest = null;
+
+// Stores the current course and figures as a request, then resolves to { link, subject, body }.
+// The link carries only the request's id. The sender is the signed-in account.
+function buildNotification() {
+  const profile = activeProfile();
+  if (!profile || !user) return Promise.reject(new Error('Nothing to send'));
+  const from = user.email;
+  const note = document.getElementById('notify-note').value.trim();
+  const course = `${profile.name}${profile.code ? ' (' + profile.code + ')' : ''}`;
+  const payload = encodeRequest(profile, readInputs(), state.settings, { from, note });
+
+  let stored;
+  if (storedRequest && storedRequest.payload === payload) {
+    stored = Promise.resolve(storedRequest.id);
+  } else {
+    const ref = db.collection('requestDetails').doc();
+    flash('Saving the request…');
+    stored = ref.set({
+      payload, from, course: course.slice(0, 190),
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    }).then(() => {
+      storedRequest = { payload, id: ref.id };
+      return ref.id;
+    });
+  }
+  return stored.then(id => {
+    const link = `${window.location.origin}${window.location.pathname}?${REQUEST_PARAM}=${id}`;
+    const body = [
+      `The recruitment forecast for ${course} suggests a suspension request may be worth making. Please review and decide.`,
+      note ? `Note: ${note}` : '',
+      `Open the forecast with this course and its figures filled in (you will be asked to sign in):\n${link}`,
+      `Sent by ${from}`,
+    ].filter(Boolean).join('\n\n');
+    return { link, subject: `Recruitment suspension — ${course}`, body };
+  });
+}
+
+document.getElementById('notify-ads').onclick = () => {
+  buildNotification().then(n => {
+    window.location.href = `mailto:${ADS_EMAIL}?subject=${encodeURIComponent(n.subject)}&body=${encodeURIComponent(n.body)}`;
+  }, writeFailed);
+};
+document.getElementById('notify-gmail').onclick = () => {
+  // Opened before the request is stored, or the browser would block it as a pop-up.
+  const win = window.open('', '_blank');
+  buildNotification().then(n => {
+    const url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(ADS_EMAIL)}&su=${encodeURIComponent(n.subject)}&body=${encodeURIComponent(n.body)}`;
+    if (!win) { window.location.href = url; return; }
+    win.opener = null;
+    win.location.href = url;
+  }, e => {
+    if (win) win.close();
+    writeFailed(e);
+  });
+};
+document.getElementById('notify-copy').onclick = () => {
+  buildNotification().then(n => {
+    navigator.clipboard.writeText(n.link).then(() => flash('Link copied'), () => {
+      // Some browsers refuse to copy once the save has finished. The request is stored, so a second click copies at once.
+      flash('Request saved. Click Copy link again to copy it');
+    });
+  }, writeFailed);
 };
 
 /* ===================== UTILITIES ===================== */
@@ -702,7 +1304,13 @@ function flash(msg) {
 }
 
 /* ===================== INIT ===================== */
-switchTab('predict');
+loadRequest();
+initNotify();
+document.getElementById('auth-signin').onclick = signIn;
+document.getElementById('auth-signout').onclick = () => auth.signOut();
+document.getElementById('sign-out').onclick = () => auth.signOut();
+// The tool opens from here, once a permitted account is signed in and the shared data has loaded.
+auth.onAuthStateChanged(onAuthChanged);
 </script>
 </body>
 </html>
