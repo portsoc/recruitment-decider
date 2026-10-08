@@ -1,6 +1,4 @@
 // Fixed configuration for the tool.
-import members from '../members.json' with { type: 'json' };
-
 export const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyB8RUWwassFKOxBRXtpDFT5oxE0x7gNpLI',
   authDomain: 'uop-recruitment-decider.firebaseapp.com',
@@ -9,11 +7,11 @@ export const FIREBASE_CONFIG = {
 };
 
 // Who the suspension workflow runs between. The AHS raises a request; the ADS decides.
-// The accounts are listed once, in members.json, which also feeds firestore.rules.
-export const ADS_EMAIL = members.ads;
-export const ADMIN_EMAIL = members.admin;
-export const DECIDER_EMAILS = [members.ads, members.admin];
-export const MEMBER_EMAILS = [...DECIDER_EMAILS, ...members.ahs];
+// The page needs these two to address emails and name a contact; rules.js reads them from here
+// too. The AHS accounts are kept in rules.js, which only feeds firestore.rules and is never
+// published, so the full list of who has access stays off the site.
+export const ADS_EMAIL = 'kirsten.farrell@port.ac.uk';
+export const ADMIN_EMAIL = 'matt.dennis@port.ac.uk';
 
 export const PREFS_KEY = 'recruitment-decider-prefs-v1';
 // Where courses, settings and done marks were kept before sign-in was added. Read only to offer moving them across.

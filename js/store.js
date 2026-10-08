@@ -3,7 +3,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, serverTimestamp } from 'firebase/firestore';
 import { DEFAULT_SETTINGS } from '../forecast.js';
-import { FIREBASE_CONFIG, DECIDER_EMAILS, PREFS_KEY, LEGACY_STATE_KEY } from './config.js';
+import { FIREBASE_CONFIG, PREFS_KEY, LEGACY_STATE_KEY } from './config.js';
 import { flash } from './dom.js';
 
 const app = initializeApp(FIREBASE_CONFIG);
@@ -47,7 +47,7 @@ export function savePrefs() {
   } catch (e) { console.warn('Could not save to this browser', e); }
 }
 
-export const isDecider = () => !!state.user && DECIDER_EMAILS.includes(state.user.email);
+export const isDecider = () => !!state.user?.decider;
 export const activeProfile = () => state.request?.profile ?? state.profiles.find(p => p.id === state.currentProfileId);
 export const activeSettings = () => state.request?.settings ?? state.settings;
 

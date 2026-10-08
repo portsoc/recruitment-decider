@@ -2,15 +2,13 @@
 // Checks firestore.rules against who may do what, using the Firebase Rules test API.
 // Nothing is published. Needs a signed-in gcloud account. Usage: node test_rules.js
 import { execSync } from 'node:child_process';
-import members from './members.json' with { type: 'json' };
-import { rulesSource } from './rules.js';
+import { rulesSource, AHS_EMAILS } from './rules.js';
+import { ADS_EMAIL as ADS, ADMIN_EMAIL as ADMIN } from './js/config.js';
 
 const PROJECT = 'uop-recruitment-decider';
 const token = execSync('gcloud auth print-access-token', { encoding: 'utf8' }).trim();
 
-const AHS = members.ahs[0];
-const ADS = members.ads;
-const ADMIN = members.admin;
+const AHS = AHS_EMAILS[0];
 const NOW = '2026-10-01T10:00:00Z';
 const stamp = email => ({ name: 'Course', updatedBy: email, updatedAt: NOW });
 const request = (from, createdAt = NOW) => ({ payload: 'p', from, course: 'Course', createdAt });
@@ -18,6 +16,10 @@ const outcome = by => ({ decision: 'Suspend', date: '2026-10-01', course: 'Cours
 
 // [description, ALLOW or DENY, method, document path, signed-in email, data written]
 const CASES = [
+  ['AHS checks member access', 'ALLOW', 'get', 'access/member', AHS],
+  ['AHS checks decider access', 'DENY', 'get', 'access/decider', AHS],
+  ['Admin checks decider access', 'ALLOW', 'get', 'access/decider', ADMIN],
+  ['Someone off the list checks member access', 'DENY', 'get', 'access/member', 'someone@port.ac.uk'],
   ['AHS saves a course in their own name', 'ALLOW', 'create', 'profiles/p1', AHS, stamp(AHS)],
   ['AHS saves a course in someone else\'s name', 'DENY', 'update', 'profiles/p1', AHS, stamp(ADS)],
   ['AHS saves a course without a stamp', 'DENY', 'create', 'profiles/p1', AHS, { name: 'Course' }],

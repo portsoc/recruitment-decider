@@ -1,8 +1,8 @@
 // Entry point: sign-in, live sync of the shared data, and the tabs.
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
-import { collection, doc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { DEFAULT_SETTINGS, migrateProfile } from '../forecast.js';
-import { ADMIN_EMAIL, MEMBER_EMAILS } from './config.js';
+import { ADMIN_EMAIL } from './config.js';
 import { $, $$ } from './dom.js';
 import { auth, db, state } from './store.js';
 import { loadRequestFromLink, fetchRequest, renderDonePanel, initDonePanel } from './request.js';
@@ -66,7 +66,19 @@ async function signIn() {
   }
 }
 
-function onAuthChanged(u) {
+// firestore.rules lets an account read access/<role> only if it holds that role, so the page
+// learns what the account may do without carrying the list of who is on it.
+async function hasRole(role) {
+  try {
+    await getDoc(doc(db, 'access', role));
+    return true;
+  } catch (e) {
+    if (e.code === 'permission-denied') return false;
+    throw e;
+  }
+}
+
+async function onAuthChanged(u) {
   unsubscribe.forEach(stop => stop());
   unsubscribe = [];
   state.user = null;
@@ -75,11 +87,22 @@ function onAuthChanged(u) {
     return;
   }
   const email = (u.email || '').toLowerCase();
-  if (!MEMBER_EMAILS.includes(email)) {
+  showAuthScreen('Checking access…');
+  let member, decider;
+  try {
+    [member, decider] = await Promise.all([hasRole('member'), hasRole('decider')]);
+  } catch (e) {
+    console.warn(e);
+    showAuthScreen('', { signOut: true, error: 'Access could not be checked. Check your connection and reload the page.' });
+    return;
+  }
+  // A different account may have signed in while the checks were running.
+  if (auth.currentUser !== u) return;
+  if (!member) {
     showAuthScreen(`${email || 'This account'} does not have access to this tool.`, { signOut: true });
     return;
   }
-  state.user = { email };
+  state.user = { email, decider };
   $('#user-email').textContent = email;
   $('#notify-from').textContent = email;
   showAuthScreen('Loading…');

@@ -10,8 +10,8 @@ import { rulesSource } from './rules.js';
 
 const PROJECT = 'uop-recruitment-decider';
 const SITE = 'uop-recruitment-decider';
-// Only these files are published; tests, tooling and css/input.css stay out of the site.
-const FILES = ['index.html', 'forecast.js', 'members.json', 'css/app.css', ...fs.readdirSync(path.join(import.meta.dirname, 'js')).map(f => `js/${f}`)];
+// Only these files are published; tests, tooling (including rules.js) and css/input.css stay out of the site.
+const FILES = ['index.html', 'forecast.js', 'css/app.css', ...fs.readdirSync(path.join(import.meta.dirname, 'js')).map(f => `js/${f}`)];
 
 const API = 'https://firebasehosting.googleapis.com/v1beta1';
 const RULES_API = 'https://firebaserules.googleapis.com/v1';

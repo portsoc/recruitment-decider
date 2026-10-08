@@ -1,8 +1,8 @@
 rules_version = '2';
 
-// Access is limited to the port.ac.uk accounts named in members.json, signed in with Google.
-// rules.js fills in the two placeholder lists below from members.json before the rules are
-// tested or published, so edit the accounts there, not here.
+// Access is limited to the port.ac.uk accounts named in js/config.js and rules.js, signed in
+// with Google. rules.js fills in the two placeholder lists below before the rules are tested or
+// published, so edit the accounts there, not here.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -25,6 +25,12 @@ service cloud.firestore {
     function stampedBySelf() {
       return request.resource.data.updatedBy == request.auth.token.email
         && request.resource.data.updatedAt == request.time;
+    }
+
+    // Lets the page ask what the signed-in account may do without holding the lists itself:
+    // reading access/member or access/decider succeeds only for that role. Nothing is stored.
+    match /access/{role} {
+      allow get: if (role == 'member' && isMember()) || (role == 'decider' && isDecider());
     }
 
     // Course profiles: shared by everyone on the list.
