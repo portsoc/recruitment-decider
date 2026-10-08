@@ -28,15 +28,22 @@ service cloud.firestore {
       ]);
     }
 
+    // Every saved change names its author and the server time, so the stamp cannot be forged.
+    function stampedBySelf() {
+      return request.resource.data.updatedBy == request.auth.token.email
+        && request.resource.data.updatedAt == request.time;
+    }
+
     // Course profiles: shared by everyone on the list.
     match /profiles/{profileId} {
-      allow read, write: if isMember();
+      allow read, delete: if isMember();
+      allow create, update: if isMember() && stampedBySelf();
     }
 
     // Suspension settings and key decision dates: everyone reads, ADS and admin change.
     match /shared/{docId} {
       allow read: if isMember();
-      allow write: if isDecider();
+      allow create, update: if isDecider() && stampedBySelf();
     }
 
     // Course and figures of a suspension request. The emailed link carries only the document
@@ -47,6 +54,7 @@ service cloud.firestore {
       allow create: if isMember()
         && request.resource.data.keys().hasOnly(['payload', 'from', 'course', 'createdAt'])
         && request.resource.data.from == request.auth.token.email
+        && request.resource.data.createdAt == request.time
         && request.resource.data.payload is string
         && request.resource.data.payload.size() < 4000
         && request.resource.data.course is string
@@ -58,7 +66,8 @@ service cloud.firestore {
     // Outcome recorded against a suspension request: everyone reads, ADS and admin record.
     match /requests/{requestKey} {
       allow read: if isMember();
-      allow write: if isDecider();
+      allow create, update: if isDecider() && request.resource.data.by == request.auth.token.email;
+      allow delete: if isDecider();
     }
 
     match /{document=**} {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Publishes the tool to Firebase Hosting using the signed-in gcloud account.
+// Publishes firestore.rules and the tool to Firebase Hosting using the signed-in gcloud account.
 // Usage: node deploy.js
 const { execSync } = require('child_process');
 const crypto = require('crypto');
@@ -13,6 +13,7 @@ const SITE = 'uop-recruitment-decider';
 const FILES = ['index.html', 'forecast.js'];
 
 const API = 'https://firebasehosting.googleapis.com/v1beta1';
+const RULES_API = 'https://firebaserules.googleapis.com/v1';
 const token = execSync('gcloud auth print-access-token', { encoding: 'utf8' }).trim();
 const auth = { Authorization: `Bearer ${token}`, 'x-goog-user-project': PROJECT };
 
@@ -27,7 +28,19 @@ async function call(method, url, body) {
   return text ? JSON.parse(text) : {};
 }
 
+// Rules go first: a ruleset that fails to compile stops the release before the site changes.
+async function publishRules() {
+  const ruleset = await call('POST', `${RULES_API}/projects/${PROJECT}/rulesets`, {
+    source: { files: [{ name: 'firestore.rules', content: fs.readFileSync(path.join(__dirname, 'firestore.rules'), 'utf8') }] },
+  });
+  const release = `projects/${PROJECT}/releases/cloud.firestore`;
+  await call('PATCH', `${RULES_API}/${release}`, { release: { name: release, rulesetName: ruleset.name } });
+  console.log(`Published firestore.rules as ${ruleset.name}`);
+}
+
 (async () => {
+  await publishRules();
+
   const version = await call('POST', `${API}/sites/${SITE}/versions`, {
     config: {
       headers: [{
