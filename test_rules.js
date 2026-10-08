@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Checks firestore.rules against who may do what, using the Firebase Rules test API.
 // Nothing is published. Needs a signed-in gcloud account. Usage: node test_rules.js
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const PROJECT = 'uop-recruitment-decider';
 const token = execSync('gcloud auth print-access-token', { encoding: 'utf8' }).trim();
@@ -55,7 +55,7 @@ const testCases = CASES.map(([, expectation, method, doc, email, data]) => ({
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'x-goog-user-project': PROJECT, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      source: { files: [{ name: 'firestore.rules', content: fs.readFileSync(path.join(__dirname, 'firestore.rules'), 'utf8') }] },
+      source: { files: [{ name: 'firestore.rules', content: fs.readFileSync(path.join(import.meta.dirname, 'firestore.rules'), 'utf8') }] },
       testSuite: { testCases },
     }),
   });

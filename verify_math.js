@@ -3,7 +3,10 @@
 //
 // Run: node verify_math.js
 
-const { DEFAULT_CURVE, DEFAULT_SETTINGS, forecast, recommend } = require('./forecast.js');
+import {
+  DEFAULT_CURVE, DEFAULT_SETTINGS, forecast, recommend,
+  encodeRequest, decodeRequest, weeksUntil, cvFromHistory, isDefaultCurve, newProfile,
+} from './forecast.js';
 
 function baseProfile(overrides = {}) {
   return {
@@ -86,7 +89,6 @@ allPass &= run('9. Same Dental Hygiene state but at 22 weeks out (floor analysis
 
 // The AHS → ADS link must reproduce the forecast exactly, and must survive a tampered link.
 console.log('\n--- Suspension request link ---\n');
-const { encodeRequest, decodeRequest } = require('./forecast.js');
 
 function check(name, pass) {
   console.log(`${pass ? '✓' : '✗'} ${name}`);
@@ -125,7 +127,6 @@ allPass &= check('14. Tampered link values are coerced to safe numbers and known
   && t.settings.safetyBuffer === DEFAULT_SETTINGS.safetyBuffer
   && Number.isFinite(forecast(t.profile, t.inputs, t.settings).meanNewIntake));
 
-const { weeksUntil, cvFromHistory, isDefaultCurve, newProfile } = require('./forecast.js');
 const today = new Date(2026, 8, 29); // 29 Sep 2026
 allPass &= check('15. Weeks until start is worked out from the start date',
   weeksUntil('2027-01-19', today) === 16 && weeksUntil('2026-09-29', today) === 0

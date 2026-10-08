@@ -1,0 +1,11 @@
+{
+  "name": "recruitment-decider",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node verify_math.js",
+    "test:rules": "node test_rules.js",
+    "deploy": "node deploy.js"
+  },
+  "engines": { "node": ">=22" }
+}

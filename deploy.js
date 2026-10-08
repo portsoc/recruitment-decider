@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 // Publishes firestore.rules and the tool to Firebase Hosting using the signed-in gcloud account.
 // Usage: node deploy.js
-const { execSync } = require('child_process');
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
-const zlib = require('zlib');
+import { execSync } from 'node:child_process';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import zlib from 'node:zlib';
 
 const PROJECT = 'uop-recruitment-decider';
 const SITE = 'uop-recruitment-decider';
 // Only these files are published; tests and tooling stay out of the site.
-const FILES = ['index.html', 'forecast.js'];
+const FILES = ['index.html', 'forecast.js', ...fs.readdirSync(path.join(import.meta.dirname, 'js')).map(f => `js/${f}`)];
 
 const API = 'https://firebasehosting.googleapis.com/v1beta1';
 const RULES_API = 'https://firebaserules.googleapis.com/v1';
@@ -31,7 +31,7 @@ async function call(method, url, body) {
 // Rules go first: a ruleset that fails to compile stops the release before the site changes.
 async function publishRules() {
   const ruleset = await call('POST', `${RULES_API}/projects/${PROJECT}/rulesets`, {
-    source: { files: [{ name: 'firestore.rules', content: fs.readFileSync(path.join(__dirname, 'firestore.rules'), 'utf8') }] },
+    source: { files: [{ name: 'firestore.rules', content: fs.readFileSync(path.join(import.meta.dirname, 'firestore.rules'), 'utf8') }] },
   });
   const release = `projects/${PROJECT}/releases/cloud.firestore`;
   await call('PATCH', `${RULES_API}/${release}`, { release: { name: release, rulesetName: ruleset.name } });
@@ -58,7 +58,7 @@ async function publishRules() {
   const gzipped = {};
   const hashes = {};
   for (const f of FILES) {
-    const gz = zlib.gzipSync(fs.readFileSync(path.join(__dirname, f)));
+    const gz = zlib.gzipSync(fs.readFileSync(path.join(import.meta.dirname, f)));
     const hash = crypto.createHash('sha256').update(gz).digest('hex');
     gzipped[hash] = gz;
     hashes['/' + f] = hash;
