@@ -2,15 +2,15 @@
 // Checks firestore.rules against who may do what, using the Firebase Rules test API.
 // Nothing is published. Needs a signed-in gcloud account. Usage: node test_rules.js
 import { execSync } from 'node:child_process';
-import fs from 'node:fs';
-import path from 'node:path';
+import members from './members.json' with { type: 'json' };
+import { rulesSource } from './rules.js';
 
 const PROJECT = 'uop-recruitment-decider';
 const token = execSync('gcloud auth print-access-token', { encoding: 'utf8' }).trim();
 
-const AHS = 'tracy.wallis@port.ac.uk';
-const ADS = 'kirsten.farrell@port.ac.uk';
-const ADMIN = 'matt.dennis@port.ac.uk';
+const AHS = members.ahs[0];
+const ADS = members.ads;
+const ADMIN = members.admin;
 const NOW = '2026-10-01T10:00:00Z';
 const stamp = email => ({ name: 'Course', updatedBy: email, updatedAt: NOW });
 const request = (from, createdAt = NOW) => ({ payload: 'p', from, course: 'Course', createdAt });
@@ -55,7 +55,7 @@ const testCases = CASES.map(([, expectation, method, doc, email, data]) => ({
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'x-goog-user-project': PROJECT, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      source: { files: [{ name: 'firestore.rules', content: fs.readFileSync(path.join(import.meta.dirname, 'firestore.rules'), 'utf8') }] },
+      source: { files: [{ name: 'firestore.rules', content: rulesSource() }] },
       testSuite: { testCases },
     }),
   });

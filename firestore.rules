@@ -1,7 +1,8 @@
 rules_version = '2';
 
-// Access is limited to the named port.ac.uk accounts, signed in with Google.
-// Keep these lists in step with ADS_EMAIL, AHS_EMAILS and ADMIN_EMAIL in index.html.
+// Access is limited to the port.ac.uk accounts named in members.json, signed in with Google.
+// rules.js fills in the two placeholder lists below from members.json before the rules are
+// tested or published, so edit the accounts there, not here.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -13,19 +14,11 @@ service cloud.firestore {
 
     // ADS and admin: decide on requests and own the shared settings.
     function isDecider() {
-      return signedIn() && request.auth.token.email in [
-        'kirsten.farrell@port.ac.uk',
-        'matt.dennis@port.ac.uk'
-      ];
+      return signedIn() && request.auth.token.email in __DECIDER_EMAILS__;
     }
 
     function isMember() {
-      return isDecider() || (signedIn() && request.auth.token.email in [
-        'tracy.wallis@port.ac.uk',
-        'roger.moore@port.ac.uk',
-        'simon.archer@port.ac.uk',
-        'fiona.myers@port.ac.uk'
-      ]);
+      return isDecider() || (signedIn() && request.auth.token.email in __AHS_EMAILS__);
     }
 
     // Every saved change names its author and the server time, so the stamp cannot be forged.
