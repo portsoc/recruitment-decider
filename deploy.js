@@ -6,11 +6,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { rulesSource } from './rules.js';
 
 const PROJECT = 'uop-recruitment-decider';
 const SITE = 'uop-recruitment-decider';
-// Only these files are published; tests and tooling stay out of the site.
-const FILES = ['index.html', 'forecast.js', ...fs.readdirSync(path.join(import.meta.dirname, 'js')).map(f => `js/${f}`)];
+// Only these files are published; tests, tooling and css/input.css stay out of the site.
+const FILES = ['index.html', 'forecast.js', 'members.json', 'css/app.css', ...fs.readdirSync(path.join(import.meta.dirname, 'js')).map(f => `js/${f}`)];
 
 const API = 'https://firebasehosting.googleapis.com/v1beta1';
 const RULES_API = 'https://firebaserules.googleapis.com/v1';
@@ -31,7 +32,7 @@ async function call(method, url, body) {
 // Rules go first: a ruleset that fails to compile stops the release before the site changes.
 async function publishRules() {
   const ruleset = await call('POST', `${RULES_API}/projects/${PROJECT}/rulesets`, {
-    source: { files: [{ name: 'firestore.rules', content: fs.readFileSync(path.join(import.meta.dirname, 'firestore.rules'), 'utf8') }] },
+    source: { files: [{ name: 'firestore.rules', content: rulesSource() }] },
   });
   const release = `projects/${PROJECT}/releases/cloud.firestore`;
   await call('PATCH', `${RULES_API}/${release}`, { release: { name: release, rulesetName: ruleset.name } });
@@ -39,6 +40,7 @@ async function publishRules() {
 }
 
 (async () => {
+  execSync('npm run build', { cwd: import.meta.dirname, stdio: 'inherit' });
   await publishRules();
 
   const version = await call('POST', `${API}/sites/${SITE}/versions`, {

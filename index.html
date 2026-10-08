@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recruitment Suspension Decider</title>
-<!-- Library versions are pinned here and in the import map; check npm for newer releases when updating. -->
-<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3"></script>
+<!-- Library versions are pinned here and in package.json; check npm for newer releases when updating. -->
+<link rel="stylesheet" href="css/app.css">
 <script type="importmap">
 {
   "imports": {
@@ -17,45 +17,6 @@
 }
 </script>
 <script type="module" src="js/main.js"></script>
-<style>
-  /* Read by js/chart.js, so the chart's colours live with the rest of the styling. */
-  :root {
-    --chart-line: #0f172a;
-    --chart-fill: rgb(15 23 42 / 0.08);
-    --chart-cap: #dc2626;
-    --chart-buffer: #d97706;
-    --chart-mean: #059669;
-    --chart-label-font: 11px system-ui, sans-serif;
-  }
-</style>
-<style type="text/tailwindcss">
-  @layer components {
-    .card { @apply bg-white border border-slate-200 rounded-lg p-5; }
-    .field-label { @apply text-xs uppercase tracking-wide text-slate-600 font-semibold; }
-    .hint { @apply text-xs text-slate-500; }
-    .input { @apply w-full px-2 py-1.5 border border-slate-300 rounded-md bg-white focus:outline-2 focus:outline-blue-500 focus:-outline-offset-1 disabled:bg-slate-50 disabled:text-slate-500; }
-    .input[readonly] { @apply bg-slate-100; }
-    .btn-primary { @apply px-4 py-2 bg-slate-900 text-white rounded font-medium cursor-pointer hover:bg-slate-700; }
-    .btn-secondary { @apply px-3 py-2 border border-slate-300 rounded text-sm cursor-pointer hover:bg-slate-50; }
-    .btn-link { @apply text-blue-600 cursor-pointer hover:underline; }
-    .btn-remove { @apply text-xs text-red-600 cursor-pointer hover:underline; }
-    .tab-btn { @apply px-4 py-2 border-b-2 border-transparent font-medium text-slate-500 cursor-pointer aria-selected:border-slate-900 aria-selected:text-slate-900; }
-
-    /* Recommendation card: js/predict.js sets data-tone from the recommendation's colour. */
-    .tone[data-tone="emerald"] { @apply bg-emerald-50 border-emerald-300; }
-    .tone[data-tone="emerald"] .tone-eyebrow { @apply text-emerald-700; }
-    .tone[data-tone="emerald"] .tone-strong { @apply text-emerald-900; }
-    .tone[data-tone="emerald"] .tone-text { @apply text-emerald-800; }
-    .tone[data-tone="amber"] { @apply bg-amber-50 border-amber-300; }
-    .tone[data-tone="amber"] .tone-eyebrow { @apply text-amber-700; }
-    .tone[data-tone="amber"] .tone-strong { @apply text-amber-900; }
-    .tone[data-tone="amber"] .tone-text { @apply text-amber-800; }
-    .tone[data-tone="slate"] { @apply bg-slate-100 border-slate-300; }
-    .tone[data-tone="slate"] .tone-eyebrow { @apply text-slate-600; }
-    .tone[data-tone="slate"] .tone-strong { @apply text-slate-900; }
-    .tone[data-tone="slate"] .tone-text { @apply text-slate-700; }
-  }
-</style>
 </head>
 <body class="bg-slate-50 min-h-screen text-slate-900">
 

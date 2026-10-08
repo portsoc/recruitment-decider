@@ -5,7 +5,15 @@
   "scripts": {
     "test": "node verify_math.js",
     "test:rules": "node test_rules.js",
-    "deploy": "node deploy.js"
+    "deploy": "node deploy.js",
+    "build": "tailwindcss -i css/input.css -o css/app.css --minify",
+    "dev": "tailwindcss -i css/input.css -o css/app.css --watch"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "tailwindcss": "4.3.3"
+  }
 }
